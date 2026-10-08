@@ -78,7 +78,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] 0.1 Install tools
 - [x] 0.2 Learn minimum concepts (async, FastAPI, SQLAlchemy/Alembic, Docker, HTTP codes)
 - [x] 0.3 Repo + CLAUDE.md
-- [ ] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · 1.3 db+health · 1.4 service template · 1.5 Makefile
+- [ ] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · [x] 1.3 db+health · 1.4 service template · 1.5 Makefile
 - [ ] Phase 2 Identity (2.1–2.11)
 - [ ] Phase 3 Shared auth in chassis
 - [ ] Phase 4 Gateway
@@ -96,7 +96,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit 1.2, then Phase 1, Step 1.3 (db.py, health.py, Base/naming/UUIDv7).
+**Next step:** commit 1.3, then Phase 1, Step 1.4 (service template).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -122,3 +122,12 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   `{"error": {"code", "message", "request_id", "details?"}}`; `AppError` subclasses set
   `code`/`http_status`. `request_id_var` (ContextVar in logging.py) must be set by
   middleware (gateway/service) per request.
+- Step 1.3: chassis now has `db.py` (module-level `init_db/close_db/session_scope/get_session`),
+  `health.py` (`health_router`, `register_readiness_check`, `db_ping_check`), `models.py`
+  (`Base` with E.2 naming convention, `TimestampMixin`, `new_id()` UUIDv7). `updated_at` is set
+  in repositories, not via ORM `onupdate`. CHECK constraints must be given a `name=` (naming
+  convention uses it). IMPORTANT: `get_session` commits AFTER the response is sent (FastAPI
+  0.143), so use cases that must surface DB errors (409 on unique violation, quota checks)
+  must `await session.commit()` themselves before returning.
+- Chassis tests: `cd libs/smarthire_common && .venv/bin/python -m pytest` (needs pytest-asyncio,
+  aiosqlite, httpx in the venv; uses in-memory SQLite, no Postgres required).
