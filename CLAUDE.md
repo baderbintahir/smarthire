@@ -77,8 +77,8 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 
 - [x] 0.1 Install tools
 - [x] 0.2 Learn minimum concepts (async, FastAPI, SQLAlchemy/Alembic, Docker, HTTP codes)
-- [ ] 0.3 Repo + CLAUDE.md  (files written; first commit pending user OK)
-- [ ] Phase 1 Foundation: 1.1 compose pg+redis · 1.2 chassis skeleton · 1.3 db+health · 1.4 service template · 1.5 Makefile
+- [x] 0.3 Repo + CLAUDE.md
+- [ ] Phase 1 Foundation: [x] 1.1 compose pg+redis · 1.2 chassis skeleton · 1.3 db+health · 1.4 service template · 1.5 Makefile
 - [ ] Phase 2 Identity (2.1–2.11)
 - [ ] Phase 3 Shared auth in chassis
 - [ ] Phase 4 Gateway
@@ -96,7 +96,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** 0.3 commit, then Phase 1, Step 1.1.
+**Next step:** commit 1.1, then Phase 1, Step 1.2 (chassis library skeleton).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -105,3 +105,14 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - `docs/SmartHire_Implementation_Plan.md` is the original; `docs/implementation-plan.md`
   is the copy CLAUDE.md refers to. If the plan is edited, keep them in sync
   (or delete the original).
+- Service name stays `identity` (not `auth`): schema/user `identity`/`identity_user`,
+  topic `identity.users`, route `/api/identity/*`.
+- Step 1.1: Postgres init is `infra/postgres/init.sh` (not `init.sql` as in the plan),
+  because passwords come from env vars (`<SERVICE>_DB_PASSWORD` in `.env`). It runs only
+  on an empty volume; changing it requires `docker compose down -v`. Compose project
+  is `smarthire`; volumes `pgdata`, `redisdata`.
+- `.env` is gitignored and created by hand. There is no `.env.example` (removed by the
+  user); if it comes back, keep it in sync with the vars used in docker-compose.yml.
+  Claude's permissions deny reading/writing `.env*`, so ask the user to edit those files.
+- DB URL pattern per service: `postgresql+asyncpg://<svc>_user:<pw>@postgres:5432/smarthire`
+  (host `postgres` inside Compose, `localhost` from the host machine).
