@@ -78,7 +78,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] 0.1 Install tools
 - [x] 0.2 Learn minimum concepts (async, FastAPI, SQLAlchemy/Alembic, Docker, HTTP codes)
 - [x] 0.3 Repo + CLAUDE.md
-- [ ] Phase 1 Foundation: [x] 1.1 compose pg+redis · 1.2 chassis skeleton · 1.3 db+health · 1.4 service template · 1.5 Makefile
+- [ ] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · 1.3 db+health · 1.4 service template · 1.5 Makefile
 - [ ] Phase 2 Identity (2.1–2.11)
 - [ ] Phase 3 Shared auth in chassis
 - [ ] Phase 4 Gateway
@@ -96,7 +96,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit 1.1, then Phase 1, Step 1.2 (chassis library skeleton).
+**Next step:** commit 1.2, then Phase 1, Step 1.3 (db.py, health.py, Base/naming/UUIDv7).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -111,8 +111,14 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   because passwords come from env vars (`<SERVICE>_DB_PASSWORD` in `.env`). It runs only
   on an empty volume; changing it requires `docker compose down -v`. Compose project
   is `smarthire`; volumes `pgdata`, `redisdata`.
-- `.env` is gitignored and created by hand. There is no `.env.example` (removed by the
-  user); if it comes back, keep it in sync with the vars used in docker-compose.yml.
-  Claude's permissions deny reading/writing `.env*`, so ask the user to edit those files.
+- `.env` is gitignored and created by hand from `.env.example` (placeholders only, committed).
+  Keep `.env.example` in sync with the vars used in docker-compose.yml. Claude's
+  permissions deny reading/writing `.env*`, so ask the user to edit those files.
 - DB URL pattern per service: `postgresql+asyncpg://<svc>_user:<pw>@postgres:5432/smarthire`
   (host `postgres` inside Compose, `localhost` from the host machine).
+- Step 1.2: chassis lives in `libs/smarthire_common` (hatchling build, deps: fastapi,
+  pydantic, pydantic-settings). Dev venv: `cd libs/smarthire_common && uv venv &&
+  uv pip install -e . pytest httpx && .venv/bin/python -m pytest`. Error body shape:
+  `{"error": {"code", "message", "request_id", "details?"}}`; `AppError` subclasses set
+  `code`/`http_status`. `request_id_var` (ContextVar in logging.py) must be set by
+  middleware (gateway/service) per request.
