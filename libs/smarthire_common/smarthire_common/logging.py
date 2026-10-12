@@ -38,3 +38,9 @@ def setup_logging(service_name: str, level: str = "INFO") -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level.upper())
+    # Uvicorn installs its own plain-text handlers; drop them so its startup and access
+    # lines also go through the JSON handler (and carry the request_id)
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uv_logger = logging.getLogger(name)
+        uv_logger.handlers = []
+        uv_logger.propagate = True

@@ -1,0 +1,25 @@
+# Reference only (not loaded by Compose). Paste under `services:` in docker-compose.yml when
+# creating a real service, replacing <name>, <port> and <NAME> (upper case). Verified in Step 1.4.
+#
+#   <name>:
+#     build:
+#       context: .                                   # repo root: the image needs libs/ too
+#       dockerfile: services/<name>/Dockerfile
+#     environment:
+#       SERVICE_NAME: <name>
+#       PORT: "<port>"
+#       DATABASE_URL: postgresql+asyncpg://<name>_user:${<NAME>_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+#       DB_SCHEMA: <name>
+#     ports:
+#       - "<port>:<port>"
+#     depends_on:
+#       postgres:
+#         condition: service_healthy                 # wait until Postgres accepts connections
+#     healthcheck:                                   # slim image has no curl, so use python
+#       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:<port>/health/live')"]
+#       interval: 10s
+#       timeout: 3s
+#       retries: 5
+#
+# Also change in the copied folder: Dockerfile (WORKDIR, COPY paths, PATH: `_template` -> <name>)
+# and ENV PORT/EXPOSE.

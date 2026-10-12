@@ -78,7 +78,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] 0.1 Install tools
 - [x] 0.2 Learn minimum concepts (async, FastAPI, SQLAlchemy/Alembic, Docker, HTTP codes)
 - [x] 0.3 Repo + CLAUDE.md
-- [ ] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · [x] 1.3 db+health · 1.4 service template · 1.5 Makefile
+- [ ] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · [x] 1.3 db+health · [x] 1.4 service template · 1.5 Makefile
 - [ ] Phase 2 Identity (2.1–2.11)
 - [ ] Phase 3 Shared auth in chassis
 - [ ] Phase 4 Gateway
@@ -96,7 +96,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit 1.3, then Phase 1, Step 1.4 (service template).
+**Next step:** commit 1.4, then Step 1.5 (Makefile), then Phase 2 (Identity).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -131,3 +131,18 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   must `await session.commit()` themselves before returning.
 - Chassis tests: `cd libs/smarthire_common && .venv/bin/python -m pytest` (needs pytest-asyncio,
   aiosqlite, httpx in the venv; uses in-memory SQLite, no Postgres required).
+- Step 1.4: `services/_template/` is the copy-me service. To make a service: copy the folder,
+  rename in pyproject.toml/Dockerfile (`_template` -> name), set `service_name`, `port`,
+  `db_schema` defaults in app/config.py, run `uv lock`, add a compose block (build context is
+  the REPO ROOT; copy the block from `services/_template/compose.snippet.yml`). Apps use `create_app()` with uvicorn
+  `--factory`. Local dev/test per service: `cd services/<name> && uv sync && uv run pytest`.
+  Alembic: `alembic.ini` has `prepend_sys_path = .`; env.py puts `alembic_version` in
+  `settings.db_schema` (verified it lands in the service schema, not public).
+- Chassis additions in 1.4: `RequestIdMiddleware` (middleware.py), handler for framework
+  HTTPExceptions (errors shape is uniform), and `setup_logging` re-routes uvicorn's loggers
+  through the JSON handler so access logs carry request_id.
+- Dockerfile installs uv via `pip install uv==0.12.23` because pulls from ghcr.io (the official
+  uv image) stalled on this network; Docker Hub and PyPI work. Switch back if ghcr works for you.
+- Docker builds can hang on network stalls: use `perl -e 'alarm N; exec @ARGV' <cmd>` (macOS has
+  no `timeout`).
+- `.dockerignore` at repo root keeps `.env`, `.git`, venvs out of the build context.

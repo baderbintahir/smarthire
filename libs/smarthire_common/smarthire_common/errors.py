@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from smarthire_common.logging import request_id_var
 
@@ -53,6 +54,11 @@ def register_exception_handlers(app: FastAPI) -> None:
         return _error_response(
             422, "VALIDATION_ERROR", "Request validation failed", jsonable_details(exc)
         )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def handle_http_exception(request: Request, exc: StarletteHTTPException):
+        # Errors raised by the framework itself (unknown route -> 404, wrong method -> 405)
+        return _error_response(exc.status_code, f"HTTP_{exc.status_code}", str(exc.detail))
 
     @app.exception_handler(Exception)
     async def handle_unexpected(request: Request, exc: Exception):

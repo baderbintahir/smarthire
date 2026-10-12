@@ -1,0 +1,9 @@
+# The build context is the repo root: keep secrets and junk out of it.
+.git
+.env
+.env.*
+!.env.example
+**/.venv
+**/__pycache__
+**/.pytest_cache
+docs

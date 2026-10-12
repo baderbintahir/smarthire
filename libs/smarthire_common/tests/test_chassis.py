@@ -84,3 +84,43 @@ def test_settings_read_from_env(monkeypatch):
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     s = BaseServiceSettings(_env_file=None)
     assert (s.service_name, s.log_level, s.environment) == ("identity", "DEBUG", "local")
+
+
+def test_framework_http_errors_use_same_shape():
+    r = make_client().get("/no-such-route")
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "HTTP_404"
+
+
+def test_request_id_generated_echoed_and_in_error_body():
+    from smarthire_common.middleware import RequestIdMiddleware
+
+    app = FastAPI()
+    app.add_middleware(RequestIdMiddleware)
+    register_exception_handlers(app)
+
+    @app.get("/missing")
+    async def missing():
+        raise NotFoundError("nope")
+
+    @app.get("/boom")
+    async def boom():
+        raise RuntimeError("x")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.get("/missing", headers={"X-Request-ID": "abc-1"})
+    assert r.headers["X-Request-ID"] == "abc-1"  # caller's id is reused
+    assert r.json()["error"]["request_id"] == "abc-1"  # and appears in the error body
+    generated = client.get("/missing")
+    assert generated.headers["X-Request-ID"]  # generated when absent
+    assert client.get("/boom", headers={"X-Request-ID": "abc-2"}).json()["error"]["request_id"] == "abc-2"
+
+
+def test_setup_logging_routes_uvicorn_through_json_handler():
+    from smarthire_common.logging import setup_logging
+
+    uvicorn_logger = logging.getLogger("uvicorn.access")
+    uvicorn_logger.handlers = [logging.StreamHandler()]  # what uvicorn does at startup
+    setup_logging("demo")
+    assert uvicorn_logger.handlers == [] and uvicorn_logger.propagate
+    assert isinstance(logging.getLogger().handlers[0].formatter, JsonFormatter)
