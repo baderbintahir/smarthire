@@ -20,4 +20,5 @@ smarthire-common = { path = "../../libs/smarthire_common", editable = true }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]  # the service is not an installed package: make `import app` work under plain `pytest`
 asyncio_mode = "auto"

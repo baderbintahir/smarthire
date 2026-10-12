@@ -78,7 +78,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] 0.1 Install tools
 - [x] 0.2 Learn minimum concepts (async, FastAPI, SQLAlchemy/Alembic, Docker, HTTP codes)
 - [x] 0.3 Repo + CLAUDE.md
-- [ ] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · [x] 1.3 db+health · [x] 1.4 service template · 1.5 Makefile
+- [x] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · [x] 1.3 db+health · [x] 1.4 service template · [x] 1.5 Makefile
 - [ ] Phase 2 Identity (2.1–2.11)
 - [ ] Phase 3 Shared auth in chassis
 - [ ] Phase 4 Gateway
@@ -96,7 +96,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit 1.4, then Step 1.5 (Makefile), then Phase 2 (Identity).
+**Next step:** commit 1.5, then Phase 2 (Identity), starting at Step 2.1 (scaffold).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -146,3 +146,9 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - Docker builds can hang on network stalls: use `perl -e 'alarm N; exec @ARGV' <cmd>` (macOS has
   no `timeout`).
 - `.dockerignore` at repo root keeps `.env`, `.git`, venvs out of the build context.
+- Step 1.5: Makefile at repo root: `make help|up|down|ps|logs s=<svc>|migrate s=<svc>|test s=<svc>`.
+  `s=common` tests the shared lib (`libs/smarthire_common`). `migrate` needs the service running
+  (uses `docker compose exec`); `test` runs on the host with `uv run pytest`. Services need
+  `pythonpath = ["."]` in pytest config (already in the template) because `app` isn't installed.
+  Both `libs/smarthire_common/uv.lock` and each service's `uv.lock` are committed. Deliberately no
+  `down -v` shortcut (destroys data; type it by hand).
