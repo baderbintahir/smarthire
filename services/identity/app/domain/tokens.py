@@ -1,7 +1,7 @@
 """Access tokens (RS256 JWT) and refresh tokens (random opaque strings).
 
-RS256 = RSA signature + SHA-256. Identity signs with the PRIVATE key; every other service verifies
-with the PUBLIC key from /.well-known/jwks.json. Only Identity can mint tokens.
+RS256 = RSA signature + SHA-256. Identity signs with the PRIVATE key; every service (Identity included) verifies with the
+PUBLIC key via smarthire_common.auth. Only Identity can mint tokens.
 The JWT payload is base64, NOT encrypted: anyone can read it, so it holds no secrets."""
 
 import base64
@@ -77,20 +77,6 @@ def create_access_token(
     }
     token = jwt.encode(claims, key.private_key, algorithm=ALGORITHM, headers={"kid": key.kid})
     return token, claims
-
-
-def decode_access_token(token: str, public_key: RSAPublicKey, *, issuer: str, audience: str) -> dict:
-    """Verifies signature, exp, iss and aud. Raises jwt.InvalidTokenError on any problem."""
-    return jwt.decode(
-        token,
-        public_key,
-        # Pin the algorithm: never trust the token's own "alg" header (prevents alg-swap attacks)
-        algorithms=[ALGORITHM],
-        issuer=issuer,
-        audience=audience,
-        options={"require": ["exp", "iat", "sub", "jti", "iss", "aud"]},
-        leeway=10,  # tolerate 10 s of clock skew between machines
-    )
 
 
 def public_jwk(key: SigningKey) -> dict:

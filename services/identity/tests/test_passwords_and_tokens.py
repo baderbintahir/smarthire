@@ -34,8 +34,10 @@ def _token(key, **overrides):
 
 
 def _decode(key, token, **kw):
-    return tokens.decode_access_token(
-        token, key.public_key, issuer=kw.get("issuer", "smarthire-identity"), audience=kw.get("audience", "smarthire")
+    # Same checks as smarthire_common.auth.verify_token (the real verifier, tested in the chassis)
+    return jwt.decode(
+        token, key.public_key, algorithms=["RS256"],
+        issuer=kw.get("issuer", "smarthire-identity"), audience=kw.get("audience", "smarthire"),
     )
 
 

@@ -12,3 +12,8 @@ class BaseServiceSettings(BaseSettings):
     service_name: str  # required: a service must say who it is
     environment: str = "local"  # local | test | production
     log_level: str = "INFO"
+
+    # --- Token verification (smarthire_common.auth); only used by services that check JWTs ---
+    jwks_url: str = "http://identity:8001/.well-known/jwks.json"
+    jwt_issuer: str = "smarthire-identity"
+    jwt_audience: str = "smarthire"

@@ -72,6 +72,13 @@ class TooManyRequestsError(AppError):
         super().__init__(message, **kwargs)
 
 
+class ServiceUnavailableError(AppError):
+    """503: a dependency we need right now is down; retrying later may work."""
+
+    http_status = 503
+    code = "SERVICE_UNAVAILABLE"
+
+
 def _error_response(
     status: int, code: str, message: str, details=None, headers: dict[str, str] | None = None
 ) -> JSONResponse:

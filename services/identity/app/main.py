@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from smarthire_common.auth import StaticKeyProvider, close_auth, init_auth
 from smarthire_common.db import close_db, init_db
 from smarthire_common.errors import register_exception_handlers
 from smarthire_common.health import db_ping_check, health_router, register_readiness_check
@@ -20,7 +21,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Load the key first: a missing/invalid key should stop startup, not fail every login
-        app.state.signing_key = load_signing_key(settings.jwt_private_key_path)
+        key = app.state.signing_key = load_signing_key(settings.jwt_private_key_path)
+        # Verify tokens with the shared chassis code. Identity already holds its public key, so
+        # it uses it directly instead of fetching its own JWKS over HTTP like other services.
+        init_auth(
+            StaticKeyProvider({key.kid: key.public_key}),
+            issuer=settings.jwt_issuer,
+            audience=settings.jwt_audience,
+        )
         init_db(settings.database_url)
         init_redis(settings.redis_url)
         # Identity can't do its job without either: login needs Postgres, and the denylist and
@@ -28,6 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         register_readiness_check("database", db_ping_check)
         register_readiness_check("redis", redis_ping_check)
         yield
+        await close_auth()
         await close_redis()
         await close_db()
 

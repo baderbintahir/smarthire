@@ -80,7 +80,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] 0.3 Repo + CLAUDE.md
 - [x] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · [x] 1.3 db+health · [x] 1.4 service template · [x] 1.5 Makefile
 - [x] Phase 2 Identity (2.1–2.11): 30 tests pass; live checks in Compose verified (register/409, login cookie flags, JWKS verify, rotation + reuse detection, 401/403, 429)
-- [ ] Phase 3 Shared auth in chassis
+- [x] Phase 3 Shared auth in chassis: [x] 3.1 JWKS client + verify_token + deps · [x] 3.2 ensure_owner
 - [ ] Phase 4 Gateway
 - [ ] Phase 5 Job service
 - [ ] Phase 6 Candidate service
@@ -96,7 +96,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit Phase 2 (if not yet committed), then Phase 3 (shared auth in chassis).
+**Next step:** commit Phase 3 (`feat(common): add JWT verification and role dependencies`), then Phase 4 (Gateway).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -180,3 +180,14 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - alembic/env.py (identity + template) skips `alembic_version` in autogenerate via
   include_object; alembic.ini has `path_separator = os`.
 - Migrations are hand-written (0001 users+profiles, 0002 refresh_tokens) and applied to the dev DB.
+- Phase 3: `smarthire_common/auth.py`. Startup: `init_auth(JWKSClient(settings.jwks_url), issuer=..., audience=...)`
+  (+ `close_auth()` on shutdown); needs `init_redis` too (denylist). Routes: `Depends(get_current_user)`
+  -> `CurrentUser(user_id, role, jti, claims)`, `Depends(require_role("RECRUITER"))`, `ensure_owner(owner_id, user)`.
+  JWKSClient: 10-min cache, refetch on unknown kid throttled to once/30 s, keeps old keys if Identity
+  is down, 503 if it never got any key. Redis down during denylist check -> 503 (fail CLOSED, user's
+  decision). Settings `jwks_url` (default http://identity:8001/.well-known/jwks.json), `jwt_issuer`,
+  `jwt_audience` live in BaseServiceSettings.
+- Identity uses `StaticKeyProvider` (its own public key, no HTTP to itself) and layers DB checks
+  (status, token_version) on top via `app/api/deps.py:get_current_user`; its `require_role` passes
+  `user_dependency=` to the chassis one. Identity's old `decode_access_token` was removed (single
+  verifier lives in the chassis).
