@@ -35,6 +35,33 @@ services:
       timeout: 3s
       retries: 10
 
+  identity:
+    build:
+      context: .                                   # repo root: the image needs libs/ too
+      dockerfile: services/identity/Dockerfile
+    environment:
+      SERVICE_NAME: identity
+      PORT: "8001"
+      DATABASE_URL: postgresql+asyncpg://identity_user:${IDENTITY_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_SCHEMA: identity
+      REDIS_URL: redis://redis:6379/0
+      JWT_PRIVATE_KEY_PATH: /run/secrets/identity/jwt_private.pem
+    volumes:
+      # Dev key from `make keys` (gitignored). Read-only inside the container.
+      - ./secrets/identity:/run/secrets/identity:ro
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:                                   # slim image has no curl, so use python
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
 volumes:
   pgdata:
   redisdata:

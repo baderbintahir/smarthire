@@ -79,7 +79,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] 0.2 Learn minimum concepts (async, FastAPI, SQLAlchemy/Alembic, Docker, HTTP codes)
 - [x] 0.3 Repo + CLAUDE.md
 - [x] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · [x] 1.3 db+health · [x] 1.4 service template · [x] 1.5 Makefile
-- [ ] Phase 2 Identity (2.1–2.11)
+- [x] Phase 2 Identity (2.1–2.11): 30 tests pass; live checks in Compose verified (register/409, login cookie flags, JWKS verify, rotation + reuse detection, 401/403, 429)
 - [ ] Phase 3 Shared auth in chassis
 - [ ] Phase 4 Gateway
 - [ ] Phase 5 Job service
@@ -96,7 +96,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit 1.5, then Phase 2 (Identity), starting at Step 2.1 (scaffold).
+**Next step:** commit Phase 2 (if not yet committed), then Phase 3 (shared auth in chassis).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -152,3 +152,31 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   `pythonpath = ["."]` in pytest config (already in the template) because `app` isn't installed.
   Both `libs/smarthire_common/uv.lock` and each service's `uv.lock` are committed. Deliberately no
   `down -v` shortcut (destroys data; type it by hand).
+- Phase 2 was built in one pass at the user's request (one-off; the step-by-step working agreement
+  still applies to later phases).
+- Identity layout: api/{auth,users,jwks,deps}.py, domain/{passwords,tokens,errors}.py,
+  repositories/{users,refresh_tokens}.py, services/{registration,sessions,login_rate_limiter,admin}.py,
+  cli.py (`python -m app.cli create-admin <email>`; ADMIN can't self-register), scripts/generate_dev_keys.py.
+- Chassis additions in Phase 2: `redis.py` (init_redis/get_redis/close_redis/redis_ping_check),
+  errors `UnauthorizedError` (adds WWW-Authenticate), `ForbiddenError`, `TooManyRequestsError`
+  (adds Retry-After); `AppError(headers=...)`.
+- JWT: RS256, claims sub, role, tv (token_version), iss=smarthire-identity, aud=smarthire, iat, exp
+  (15 min), jti; header kid = RFC 7638 thumbprint of the public key. JWKS at
+  `/.well-known/jwks.json`. Key: `make keys` -> `secrets/identity/jwt_private.pem` (gitignored,
+  mounted read-only at /run/secrets/identity). Claude's permissions deny access to `secrets/`:
+  ask the user to run `make keys`.
+- Identity's `get_current_user` (app/api/deps.py) verifies locally AND checks DB status +
+  token_version; Phase 3's chassis version can't see the DB, so other services rely on denylist +
+  15-min expiry for revocation. Keep the 401 messages/behaviour identical when moving it.
+- Refresh cookie: httpOnly, Secure, SameSite=strict, Path=`/auth` (setting `refresh_cookie_path`).
+  Phase 4 MUST change it to the gateway's public path (`/api/identity/auth`). Login rate limiting
+  uses `request.client.host`; Phase 4 must switch to X-Forwarded-For from the trusted gateway.
+- Admin revoke puts `denylist:{jti}` with TTL = access-token lifetime (upper bound; issued tokens
+  aren't stored, so exact exp is unknown).
+- Tests use Testcontainers (postgres:16, redis:7) with Ryuk disabled; conftest mirrors init.sh
+  (identity_user + schema) and builds the schema via the real migrations. test_migrations checks
+  downgrade/upgrade and `alembic check` (models == migrations). Test helpers must NOT call
+  init_db/close_db while the app runs (they swap the process-wide engine).
+- alembic/env.py (identity + template) skips `alembic_version` in autogenerate via
+  include_object; alembic.ini has `path_separator = os`.
+- Migrations are hand-written (0001 users+profiles, 0002 refresh_tokens) and applied to the dev DB.

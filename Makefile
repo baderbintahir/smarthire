@@ -4,7 +4,7 @@
 .DEFAULT_GOAL := help
 
 # Targets are actions, not files: always run them even if a file/folder of that name exists
-.PHONY: help up down ps logs migrate test check-s
+.PHONY: help up down ps logs migrate test keys check-s
 
 # Where a service's code lives: s=common is the shared library, anything else is services/<s>
 SERVICE_DIR = $(if $(filter common,$(s)),libs/smarthire_common,services/$(s))
@@ -29,6 +29,9 @@ migrate: check-s ## Run DB migrations inside the running container:  make migrat
 
 test: check-s ## Run a service's tests on the host:  make test s=identity  (s=common for the library)
 	cd $(SERVICE_DIR) && uv run pytest
+
+keys: ## Generate the dev RSA key pair Identity signs JWTs with (secrets/identity, gitignored)
+	cd services/identity && uv run python scripts/generate_dev_keys.py
 
 # Internal: fail early with a clear message when s=... is missing
 check-s:
