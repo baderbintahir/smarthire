@@ -124,3 +124,44 @@ def test_setup_logging_routes_uvicorn_through_json_handler():
     setup_logging("demo")
     assert uvicorn_logger.handlers == [] and uvicorn_logger.propagate
     assert isinstance(logging.getLogger().handlers[0].formatter, JsonFormatter)
+
+
+def test_auth_and_rate_limit_errors_carry_headers():
+    from smarthire_common.errors import ForbiddenError, TooManyRequestsError, UnauthorizedError
+
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/401")
+    async def e401():
+        raise UnauthorizedError("Invalid or expired token")
+
+    @app.get("/403")
+    async def e403():
+        raise ForbiddenError("Recruiters only")
+
+    @app.get("/429")
+    async def e429():
+        raise TooManyRequestsError(retry_after=42)
+
+    client = TestClient(app)
+    r = client.get("/401")
+    assert (r.status_code, r.headers["WWW-Authenticate"]) == (401, "Bearer")
+    assert r.json()["error"]["code"] == "UNAUTHORIZED"
+    assert client.get("/403").json()["error"]["code"] == "FORBIDDEN"
+    r = client.get("/429")
+    assert (r.status_code, r.headers["Retry-After"]) == (429, "42")
+
+
+async def test_redis_helpers(monkeypatch):
+    import fakeredis
+
+    from smarthire_common import redis as sh_redis
+
+    # Swap the real client class for an in-memory fake: no Redis server needed
+    monkeypatch.setattr(sh_redis.Redis, "from_url", lambda url, **kw: fakeredis.FakeAsyncRedis(**kw))
+    sh_redis.init_redis("redis://unused")
+    await sh_redis.redis_ping_check()
+    await sh_redis.get_redis().set("k", "v")
+    assert await sh_redis.get_redis().get("k") == "v"
+    await sh_redis.close_redis()

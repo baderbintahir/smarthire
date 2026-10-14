@@ -17,13 +17,40 @@ class AppError(Exception):
     http_status: int = 400
     code: str = "BAD_REQUEST"  # stable, machine-readable; clients switch on this
 
-    def __init__(self, message: str, *, code: str | None = None, http_status: int | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        http_status: int | None = None,
+        headers: dict[str, str] | None = None,
+    ):
         super().__init__(message)
         self.message = message
+        self.headers = headers or {}  # extra response headers, e.g. Retry-After
         if code is not None:
             self.code = code
         if http_status is not None:
             self.http_status = http_status
+
+
+class UnauthorizedError(AppError):
+    """401: missing, invalid, expired or revoked credentials ("who are you?")."""
+
+    http_status = 401
+    code = "UNAUTHORIZED"
+
+    def __init__(self, message: str = "Authentication required", **kwargs):
+        # RFC 6750: tell the client which auth scheme is expected
+        kwargs.setdefault("headers", {"WWW-Authenticate": "Bearer"})
+        super().__init__(message, **kwargs)
+
+
+class ForbiddenError(AppError):
+    """403: valid identity, but not allowed to do this ("I know you, and no")."""
+
+    http_status = 403
+    code = "FORBIDDEN"
 
 
 class NotFoundError(AppError):
@@ -36,17 +63,28 @@ class ConflictError(AppError):
     code = "CONFLICT"
 
 
-def _error_response(status: int, code: str, message: str, details=None) -> JSONResponse:
+class TooManyRequestsError(AppError):
+    http_status = 429
+    code = "TOO_MANY_REQUESTS"
+
+    def __init__(self, message: str = "Too many requests", *, retry_after: int, **kwargs):
+        kwargs.setdefault("headers", {"Retry-After": str(retry_after)})
+        super().__init__(message, **kwargs)
+
+
+def _error_response(
+    status: int, code: str, message: str, details=None, headers: dict[str, str] | None = None
+) -> JSONResponse:
     body = {"code": code, "message": message, "request_id": request_id_var.get()}
     if details is not None:
         body["details"] = details
-    return JSONResponse(status_code=status, content={"error": body})
+    return JSONResponse(status_code=status, content={"error": body}, headers=headers)
 
 
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def handle_app_error(request: Request, exc: AppError):
-        return _error_response(exc.http_status, exc.code, exc.message)
+        return _error_response(exc.http_status, exc.code, exc.message, headers=exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError):
