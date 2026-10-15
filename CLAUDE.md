@@ -35,8 +35,8 @@ MongoDB (Motor), Redis, Celery + RabbitMQ, Kafka + Schema Registry
 OpenTelemetry, Jaeger, Prometheus, Grafana, Docker Compose, pytest.
 
 ## Services
-identity, gateway, job, job_enrichment, candidate, application, scoring,
-notification, analytics, semantic_index, ai_assistant.
+identity, job, job_enrichment, candidate, application, scoring, notification,
+analytics, semantic_index, ai_assistant, bff_web. Gateway: Apache APISIX (config in infra/apisix).
 
 ## Architecture rules (never break these)
 1. Database per service: a service never reads another service's tables.
@@ -54,6 +54,9 @@ notification, analytics, semantic_index, ai_assistant.
 9. Database schemas must match Appendix E of docs/implementation-plan.md:
    UUIDv7 public IDs, timestamptz, text + CHECK for statuses, explicit
    constraint names, rules enforced by constraints, indexes from queries.
+10. The gateway (Apache APISIX) holds no business logic: routing, auth, revocation
+   checks, rate limits, request IDs only. Data from several services is composed in
+   bff_web or served from event-fed replicas, never joined in the gateway.
 
 ## Conventions
 - Config via pydantic-settings and environment variables. No secrets in code
@@ -81,7 +84,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · [x] 1.3 db+health · [x] 1.4 service template · [x] 1.5 Makefile
 - [x] Phase 2 Identity (2.1–2.11): 30 tests pass; live checks in Compose verified (register/409, login cookie flags, JWKS verify, rotation + reuse detection, 401/403, 429)
 - [x] Phase 3 Shared auth in chassis: [x] 3.1 JWKS client + verify_token + deps · [x] 3.2 ensure_owner
-- [ ] Phase 4 Gateway
+- [ ] Phase 4 Gateway (APISIX, revision 2): 4.1 spike · 4.2 routes/request IDs/XFF · 4.3 JWT + revocation at edge · 4.4 rate limiting · 4.5 SSE · 4.6 metrics hooks (one commit at end)
 - [ ] Phase 5 Job service
 - [ ] Phase 6 Candidate service
 - [ ] Phase 7 Kafka + outbox
@@ -90,13 +93,14 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 10 Resume parsing, scoring, application workflow
 - [ ] Phase 11 Notification
 - [ ] Phase 12 Analytics
+- [ ] Phase 12B BFF (API composition)
 - [ ] Phase 13 Observability
 - [ ] Phase 14 Reliability + load tests (tag v0.1-core)
 - [ ] Phase 15 Semantic index
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit Phase 3 (`feat(common): add JWT verification and role dependencies`), then Phase 4 (Gateway).
+**Next step:** commit the plan revision, then Phase 4 (revised), Step 4.1: APISIX spike.
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -191,3 +195,18 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   (status, token_version) on top via `app/api/deps.py:get_current_user`; its `require_role` passes
   `user_dependency=` to the chassis one. Identity's old `decode_access_token` was removed (single
   verifier lives in the chassis).
+- Identity's REFRESH_COOKIE_PATH is `/api/identity/auth` in Compose (public path via gateway). Direct
+  calls to identity:8001/auth/* won't get the cookie sent back; use the gateway.
+- PLAN REVISION 2 (2026-10-14, supervisor review): `docs/implementation-plan.md` is authoritative;
+  `docs/SmartHire_Implementation_Plan.md` is the pre-review original (kept unchanged for reference).
+  Rationale for all changes is in Appendix F of the plan.
+  - Gateway = Apache APISIX (standalone YAML in infra/apisix), NOT a custom service. A hand-written
+    FastAPI gateway was built in the first Step 4.1 attempt and deleted (user's decision); its route
+    table/path-rewrite rules carry over to APISIX (Phase 4.2 table).
+  - Revocation enforced at the gateway: APISIX openid-connect (bearer_only, use_jwks; Identity must add
+    /.well-known/openid-configuration) + custom Lua plugin checking Redis `denylist:{jti}` and NEW
+    `revoked_before:{user_id}` (Identity writes it on logout-all and admin suspension; chassis
+    verify_token must check it too). Redis down -> 503 at gateway and services.
+  - API composition in new `services/bff_web` (Phase 12B, port 8011, no DB), forwarding the user's token.
+  - Phase 13 adds APISIX telemetry and Kafka-vs-Temporal observability; Phase 16 adds online/offline/
+    degraded paths for the AI Assistant.

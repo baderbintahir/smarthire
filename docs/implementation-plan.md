@@ -2,6 +2,13 @@
 
 A beginner-friendly guide to building the SmartHire microservice backend from an empty folder to a working, observable, AI-enabled system, using Claude in VS Code as your pair programmer.
 
+> **Revision 2 (2026-10-14), after the week-1 supervisor review.** Changes: the gateway is a
+> prebuilt product (**Apache APISIX**) instead of a hand-written FastAPI proxy (Phase 4 rewritten);
+> API composition lives in a **BFF service** (new Phase 12B), never in the gateway; revoked tokens
+> are **blocked at the gateway** using Redis (Phase 4.3, Appendix F.3); explicit guidance on
+> **Kafka vs Temporal** including observability (Appendix F.2, Phase 13); **online vs offline** paths
+> in the AI Assistant (Appendix F.5, Phase 16). Rationale for every change: **Appendix F**.
+
 ---
 
 ## How to use this plan
@@ -31,9 +38,9 @@ A beginner-friendly guide to building the SmartHire microservice backend from an
 
 | Week | Phases | Outcome |
 | --- | --- | --- |
-| 1 | 0–6 | Foundation, chassis library, Identity, Gateway, Job, Candidate |
+| 1 | 0–6 | Foundation, chassis library, Identity, Gateway (APISIX), Job, Candidate |
 | 2 | 7–9 | Kafka + outbox, Application Service, Temporal + Job Publishing workflow |
-| 3 | 10–14 | Scoring, Application workflow, Notification, Analytics, Observability, Reliability |
+| 3 | 10–14 | Scoring, Application workflow, Notification, Analytics, BFF (12B), Observability, Reliability |
 | 4 | 15 | Semantic Index (embeddings, vector search) |
 | 5 | 16–17 | AI Assistant, testing, documentation |
 
@@ -57,6 +64,8 @@ If a phase takes longer, that is fine. Understanding matters more than speed.
 | Workflows | Temporal + `temporalio` SDK | Durable sagas with retries and compensation |
 | Object storage | MinIO (S3-compatible) | Resume files |
 | Email testing | Mailpit | Catches emails locally with a web UI |
+| API gateway | Apache APISIX (standalone mode, declarative YAML) | Open source; JWT via JWKS, Redis rate limiting, request IDs, path rewrite, SSE; config lives in git (Appendix F.4) |
+| API composition | BFF service (FastAPI) + event-fed replicas | Gateway stays free of business logic (Appendix F.1) |
 | Vector DB (Part B) | Qdrant | Simple, runs in Docker, metadata filters |
 | Embeddings (Part B) | `sentence-transformers` (local) or provider API | Local is free; provider is higher quality |
 | AI agents (Part B) | LangGraph + LangChain chat model (OpenAI / Groq / Anthropic) | Agent graphs with tools |
@@ -96,7 +105,6 @@ smarthire/
 │           └── metrics.py
 ├── schemas/                      # Event JSON Schemas (registered in Schema Registry)
 ├── services/
-│   ├── gateway/
 │   ├── identity/
 │   ├── job/
 │   ├── job_enrichment/
@@ -106,8 +114,10 @@ smarthire/
 │   ├── notification/
 │   ├── analytics/
 │   ├── semantic_index/
-│   └── ai_assistant/
+│   ├── ai_assistant/
+│   └── bff_web/                  # Backend for Frontend: API composition (Phase 12B)
 ├── infra/
+│   ├── apisix/                   # Gateway: config.yaml, apisix.yaml (routes), plugins/ (Phase 4)
 │   ├── prometheus/prometheus.yml
 │   ├── grafana/dashboards/
 │   └── postgres/init.sql         # One schema + user per service
@@ -144,7 +154,7 @@ services/<name>/
 
 | Component | Port |
 | --- | --- |
-| Gateway | 8000 |
+| Gateway (APISIX proxy; container port 9080) | 8000 |
 | Identity | 8001 |
 | Job | 8002 |
 | Job Enrichment | 8003 |
@@ -155,6 +165,7 @@ services/<name>/
 | Analytics | 8008 |
 | Semantic Index | 8009 |
 | AI Assistant | 8010 |
+| BFF (web) | 8011 |
 | PostgreSQL | 5432 |
 | MongoDB | 27017 |
 | Redis | 6379 |
@@ -211,8 +222,8 @@ MongoDB (Motor), Redis, Celery + RabbitMQ, Kafka + Schema Registry
 OpenTelemetry, Jaeger, Prometheus, Grafana, Docker Compose, pytest.
 
 ## Services
-identity, gateway, job, job_enrichment, candidate, application, scoring,
-notification, analytics, semantic_index, ai_assistant.
+identity, job, job_enrichment, candidate, application, scoring, notification,
+analytics, semantic_index, ai_assistant, bff_web. Gateway: Apache APISIX (config in infra/apisix).
 
 ## Architecture rules (never break these)
 1. Database per service: a service never reads another service's tables.
@@ -230,6 +241,9 @@ notification, analytics, semantic_index, ai_assistant.
 9. Database schemas must match Appendix E of docs/implementation-plan.md:
    UUIDv7 public IDs, timestamptz, text + CHECK for statuses, explicit
    constraint names, rules enforced by constraints, indexes from queries.
+10. The gateway (Apache APISIX) holds no business logic: routing, auth, revocation
+   checks, rate limits, request IDs only. Data from several services is composed in
+   bff_web or served from event-fed replicas, never joined in the gateway.
 
 ## Conventions
 - Config via pydantic-settings and environment variables. No secrets in code.
@@ -400,29 +414,71 @@ Document a simple pattern: services load the resource and compare its owner fiel
 
 ---
 
-# Phase 4 — API Gateway (1 day)
+# Phase 4 — API Gateway with Apache APISIX (1–1.5 days)
 
-**Goal:** a single entry point that routes requests, validates tokens, rate-limits, and adds request IDs.
+**Goal:** a single, prebuilt entry point that routes requests, verifies tokens, blocks revoked tokens, rate-limits, adds request IDs, and streams responses. No business logic and no data composition in the gateway (composition is the BFF's job, Phase 12B).
 
-**Design note:** you build a small FastAPI gateway so you understand what a gateway does. In production, teams often use Kong, Traefik, or a cloud gateway; the responsibilities are the same.
+**Design note (revision 2):** we use a production gateway instead of writing one. Apache APISIX was chosen over Kong OSS (its JWT plugin can't fetch JWKS, so key rotation is manual), Traefik (no built-in JWT verification) and Envoy (powerful but heavy to configure). See Appendix F.4. APISIX runs in **standalone mode**: routes live in a YAML file in git, no etcd.
 
-### Step 4.1 — Reverse proxy routing
-> **Prompt:** "Create services/gateway: a FastAPI app that proxies /api/identity/*, /api/jobs/*, /api/candidates/*, /api/applications/*, /api/analytics/*, /api/assistant/* to the matching service using httpx.AsyncClient with timeouts. Preserve method, headers, query, and body. Auth endpoints (register, login, refresh) are public; everything else requires a valid token. Explain how the proxy works."
+**Concepts to learn first:** reverse proxy; edge concerns vs business logic; hop-by-hop headers and `X-Forwarded-*`; 502 vs 504; JWKS and key rotation; fail-closed; token bucket / fixed-window rate limiting; why gateway readiness must not depend on upstream services.
 
-### Step 4.2 — Token validation and request IDs
-Use the chassis `verify_token`. Generate an `X-Request-ID` if missing and pass it downstream; include it in logs.
+### Step 4.1 — Spike: APISIX in Compose
+Run APISIX (pinned version) in standalone mode with one route to Identity. Prove the features this phase relies on, on the pinned version, before building on them: `proxy-rewrite`, `request-id`, `openid-connect` with `bearer_only` + `use_jwks`, `limit-count` with `policy: redis`, SSE pass-through.
 
-### Step 4.3 — Rate limiting
-Redis token bucket per user (or per IP for public routes). Return 429 with `Retry-After`.
+> **Prompt:** "Add Apache APISIX (pinned version, standalone mode) to docker-compose with config in infra/apisix/ (config.yaml + apisix.yaml). Expose it on host port 8000. Add one route /api/identity/* -> identity:8001 with proxy-rewrite stripping the prefix. Explain standalone vs etcd mode and how APISIX reloads the YAML."
 
-> **Prompt:** "Add a Redis token-bucket rate limiter to the gateway with configurable rate per route group. Explain the token bucket algorithm."
+**Done when:** `curl localhost:8000/api/identity/.well-known/jwks.json` returns Identity's keys through APISIX.
 
-### Step 4.4 — Streaming pass-through
-Support Server-Sent Events responses (needed in Phase 16) by streaming the upstream response instead of buffering it.
+### Step 4.2 — Routes, request IDs, forwarding headers, timeouts
+- Route table (same rewriting rules as before):
 
-**Done when:** register and login work through `localhost:8000/api/identity/...`; protected routes without a token return 401; hammering an endpoint returns 429.
+| Public prefix | Upstream | Path sent upstream |
+| --- | --- | --- |
+| `/api/identity/*` | identity:8001 | strip `/api/identity` |
+| `/api/jobs/*` | job:8002 | strip `/api` |
+| `/api/candidates/*` | candidate:8004 | strip `/api` |
+| `/api/applications/*` | application:8005 | strip `/api` |
+| `/api/analytics/*` | analytics:8008 | strip `/api` |
+| `/api/assistant/*` | ai_assistant:8010 | strip `/api` |
+| `/api/bff/*` | bff_web:8011 | strip `/api` (Phase 12B) |
 
-**Commit:** `feat(gateway): add routing, auth, request IDs, rate limiting`
+- `request-id` plugin: reuse the client's `X-Request-ID` or generate one; forward it upstream (services log it).
+- Upstream timeouts (connect 2 s, read 30 s); APISIX returns 502 when a service is unreachable and 504 when it is too slow.
+- Identity: `REFRESH_COOKIE_PATH=/api/identity/auth`; read the client IP for login rate limiting from `X-Forwarded-For` **only when the request comes from the gateway's network** (trusted proxy), otherwise the header is forgeable.
+
+**Done when:** register/login/refresh work through `localhost:8000/api/identity/...`; the same request ID appears in APISIX and Identity logs; Identity's login limiter sees the real client IP; `/api/jobs/...` returns 502 (no Job service yet).
+
+### Step 4.3 — Authentication and revocation at the edge
+- Identity adds a minimal OIDC discovery document `GET /.well-known/openid-configuration` (`issuer`, `jwks_uri`) so APISIX can find the keys.
+- `openid-connect` plugin on protected routes: `bearer_only: true`, `use_jwks: true`, issuer/audience pinned. Public routes (register, login, refresh, logout, JWKS, discovery) have no auth plugin.
+- **Revocation at the edge (Appendix F.3):** a small custom APISIX plugin (`infra/apisix/plugins/smarthire-denylist.lua`) checks Redis after signature verification:
+  - `denylist:{jti}` (single token revoked by an admin), and
+  - `revoked_before:{user_id}` (user suspended or "logout everywhere": tokens issued before this timestamp are rejected).
+  - Redis unavailable → **503** (fail closed), never let an unchecked token through.
+- Identity writes `revoked_before:{user_id}` (TTL = access-token lifetime) on logout-all and when an admin suspends a user. The chassis `verify_token` checks the same key, so services keep enforcing it too (rule 7: defence in depth).
+
+> **Prompt:** "Configure APISIX openid-connect (bearer_only, use_jwks) against Identity's discovery document, and write a minimal Lua plugin that rejects tokens whose jti is in Redis `denylist:{jti}` or whose iat is before `revoked_before:{user_id}`, returning 503 if Redis is unreachable. Explain where in the request lifecycle (phase) the plugin runs and why it must run after JWT verification."
+
+**Done when:** no token → 401 at the gateway; tampered token → 401; an admin revokes a jti → the next request is 401 **at the gateway** (Identity never sees it); admin suspends a user → all their tokens are rejected immediately; Redis stopped → 503.
+
+**Check your understanding:** Why check the denylist at the gateway if services check it too? Why does `revoked_before` only need a TTL of 15 minutes?
+
+### Step 4.4 — Rate limiting
+`limit-count` with `policy: redis` so all APISIX instances share counters. Per user (JWT `sub`) on protected routes, per IP on public routes, stricter on `/api/identity/auth/login`. Return 429 with `Retry-After`.
+
+**Done when:** hammering an endpoint returns 429; two APISIX replicas share the same limit.
+
+### Step 4.5 — Streaming pass-through
+Disable response buffering on `/api/assistant/*` so Server-Sent Events stream through (needed in Phase 16).
+
+**Done when:** a test SSE endpoint streams events through APISIX one by one, not all at the end.
+
+### Step 4.6 — Gateway observability hooks
+Enable the APISIX `prometheus` plugin (scraped in Phase 13) and leave `opentelemetry` ready to point at Jaeger in Phase 13.
+
+**Check your understanding:** Why must the gateway's readiness not depend on Identity? Why is joining data from several services not the gateway's job?
+
+**Commit:** `feat(gateway): add APISIX gateway with JWT, revocation, rate limiting, request IDs`
 
 ---
 
@@ -752,6 +808,36 @@ Add an admin command that resets the projections and replays topics from the beg
 
 ---
 
+# Phase 12B — Backend for Frontend: API composition (1 day)
+
+**Goal:** screens that need data from several services get it in one call, without putting business logic in the gateway and without breaking database-per-service. See Appendix F.1.
+
+**Concepts to learn first:** API composition vs CQRS replicas; BFF pattern; fan-out with timeouts; partial responses and graceful degradation.
+
+### Step 12B.1 — Scaffold `services/bff_web`
+From the template, port 8011, **no database** (optionally a short Redis cache). Route `/api/bff/*` through APISIX (Phase 4.2 table).
+
+### Step 12B.2 — Composed endpoints
+Only for screens that replicas don't already serve:
+- `GET /bff/applications/{id}` (recruiter or the candidate): application (Application) + candidate profile (Candidate) + score breakdown (Scoring) + a short-lived resume download link (Candidate).
+- `GET /bff/recruiter/dashboard`: the recruiter's jobs (Job) + application counts per stage (Application) + headline metrics (Analytics).
+
+Rules:
+- Forward the **user's token** to every service: each service still checks role and ownership (rule 7). The BFF adds no permissions of its own.
+- Call services **in parallel** with per-call timeouts and circuit breakers.
+- **Partial responses:** if a non-essential call fails (e.g. Scoring), return the rest with `"score": null` and a `degraded` list, instead of failing the whole page.
+- No business rules: the BFF only fetches and shapes.
+
+> **Prompt:** "Implement GET /bff/applications/{id} in services/bff_web: call Application, Candidate and Scoring in parallel with httpx (forwarding the caller's Authorization header), each with a timeout and circuit breaker, and return a composed response that marks failed optional parts as degraded. Explain why this lives in a BFF and not in the gateway."
+
+**Done when:** one call returns the composed application view; stopping Scoring returns the view with `score: null` and `degraded: ["score"]`; a recruiter who doesn't own the job gets 403 (from Application, passed through).
+
+**Check your understanding:** When would you choose a replica (CQRS) over a BFF call? What breaks if the BFF used its own service token instead of the user's?
+
+**Commit:** `feat(bff): add web BFF with composed application and dashboard views`
+
+---
+
 # Phase 13 — Observability (1.5 days)
 
 **Goal:** you can follow one application from the HTTP request to the email in a single trace, and see the health of every workflow on a dashboard.
@@ -769,7 +855,7 @@ Add containers and `infra/prometheus/prometheus.yml` scraping every service's `/
 - **Celery:** pass context in task headers.
 - **Temporal:** add the Temporal OpenTelemetry interceptor to clients and workers.
 
-**Done when:** in Jaeger, one trace shows gateway → application → outbox relay → Kafka → notification → Celery → SMTP, and the workflow activities.
+**Done when:** in Jaeger, one trace shows gateway (APISIX) → application → outbox relay → Kafka → notification → Celery → SMTP, and the workflow activities.
 
 ### Step 13.4 — Metrics
 In the chassis: HTTP request count, latency histogram, error count. Domain metrics: workflows started/completed/failed (by type), outbox backlog, consumer lag, DLQ size, Celery queue depth, applications submitted.
@@ -779,6 +865,16 @@ Workflow failure handlers and DLQ writers publish a `SystemFailure` event to `sy
 
 ### Step 13.6 — Grafana dashboards
 Create dashboards: Service overview (RED per service), Workflows (started/failed, durations), Messaging (lag, DLQ, outbox backlog), Business (applications per minute). Export them as JSON into `infra/grafana/dashboards/`.
+
+### Step 13.7 — Gateway telemetry
+APISIX `prometheus` plugin scraped by Prometheus (requests, latency, status codes per route); `opentelemetry` plugin exporting spans to Jaeger so every trace starts at the gateway.
+
+### Step 13.8 — Observing Kafka vs Temporal (see Appendix F.2)
+- **Temporal (orchestration):** answer "where is this business process stuck?" in the Temporal UI by workflow ID (`publish-{job_id}-{version}`, `app-{application_id}`). Metrics: workflows started/completed/failed per type, activity retries, schedule-to-start latency (are workers keeping up?), workflow duration. Alert on failed workflows and rising schedule-to-start latency.
+- **Kafka (choreography):** no central view, so rely on: consumer lag per group, DLQ size, outbox backlog, events/s per topic, and traces that follow `event_id` + trace context in headers. Alert on lag growth, any DLQ message, outbox backlog older than N seconds.
+- Dashboard "Async processing": one row per workflow type, one row per consumer group.
+
+**Done when:** you can show, for one application, its Temporal history AND the Kafka events it produced, linked by one trace ID.
 
 **Commit:** `feat(observability): add tracing, metrics, and dashboards`
 
@@ -792,10 +888,10 @@ Create dashboards: Service overview (RED per service), Workflows (started/failed
 Ask Claude: *"List every place in the code where a network call happens. For each, show the timeout, retry policy, and what happens on final failure."* Fix any gaps.
 
 ### Step 14.2 — Circuit breakers on synchronous calls
-Apply breakers to gateway → service calls and to API composition calls.
+Apply breakers to BFF → service calls (API composition, Phase 12B) and to the AI Assistant's tool calls; configure APISIX upstream timeouts and passive health checks.
 
 ### Step 14.3 — Backpressure settings
-Tune: gateway rate limits, Celery prefetch (1–4), Kafka consumer `max.poll.records`, Temporal worker `max_concurrent_activities`, DB pool sizes per service.
+Tune: APISIX rate limits, Celery prefetch (1–4), Kafka consumer `max.poll.records`, Temporal worker `max_concurrent_activities`, DB pool sizes per service.
 
 ### Step 14.3b — Data retention jobs
 Implement the scheduled maintenance jobs from **Appendix E.14** (outbox, processed_events, refresh tokens, notification log cleanup).
@@ -861,6 +957,14 @@ Add a semantic similarity component (resume vector vs job vector) to the score w
 
 **Concepts to learn first:** LLM basics (tokens, context window, temperature); RAG (retrieval-augmented generation); LangGraph nodes, edges, state, tools; Server-Sent Events.
 
+### Online vs offline paths (see Appendix F.5)
+| Path | When | How |
+| --- | --- | --- |
+| **Online** | A user is waiting for an answer | SSE streaming (Steps 16.1, 16.5); retrieval only, no heavy work; strict LLM timeout + circuit breaker |
+| **Offline: background jobs** | Work too big to wait for (rank 400 applicants) | 202 + job id; Temporal workflow in batches (Step 16.6); client polls |
+| **Offline: prepared ahead** | Make online answers fast | Embeddings computed when data changes (Phase 15: publishing saga, `ResumeParsed` consumer), never at question time |
+| **Degraded** | LLM provider down | Breaker opens: fail fast with 503 + clear message; fall back to non-LLM answers where possible (e.g. ranking explained from the Scoring breakdown); hiring flows unaffected |
+
 ### Step 16.1 — Scaffold and LLM client
 Scaffold `services/ai_assistant` (MongoDB for conversations). Create an LLM client factory (OpenAI / Groq / Anthropic via LangChain chat models) chosen by config, with the API key from env. Wrap calls in a circuit breaker and timeouts.
 
@@ -899,7 +1003,7 @@ Intents: fit check, application improvement, requirement explanation. Context: t
 - Analytics consumes `AssistantQueryCompleted`: recruiter queries, candidate queries, summaries generated.
 - Spans for each graph node and LLM call with token counts and model name; Grafana panel for LLM latency and tokens.
 
-**Done when:** both assistants stream answers through the gateway, long jobs run in the background, and AI usage metrics appear.
+**Done when:** both assistants stream answers through the gateway, long jobs run in the background, and AI usage metrics appear. **Break it:** block the LLM provider (wrong API key or no network): the assistant answers 503 within its timeout, the ranking explanation still works from the Scoring breakdown, and applications keep flowing.
 
 **Commit:** `feat(assistant): add recruiter and candidate agents`
 
@@ -933,7 +1037,9 @@ You understand your system when you can do each of these **yourself**, then conf
 - [ ] Why the outbox exists and what happens if Kafka is down.
 - [ ] How a duplicate application is prevented at three different layers.
 - [ ] How the Job Publishing saga compensates, step by step.
-- [ ] How a JWT is signed, verified, refreshed, and revoked.
+- [ ] How a JWT is signed, verified, refreshed, and revoked, and where a revoked token is stopped (gateway vs service).
+- [ ] When to compose data in the BFF vs keep a replica, and why never in the gateway.
+- [ ] For a given flow, whether it belongs in Kafka or Temporal, and what you'd look at to debug it.
 - [ ] Why Analytics can be deleted and rebuilt with identical results.
 - [ ] Every constraint and index in the Application schema, and the query or rule each one protects.
 - [ ] Why the quota row lock prevents the application-limit race and why counting rows does not.
@@ -1437,6 +1543,7 @@ Vector size must match the embedding model (384 for all-MiniLM-L6-v2). Retrieval
 | --- | --- | --- |
 | `idem:{user_id}:{key}` | Cached response for an Idempotency-Key | 24 h |
 | `denylist:{jti}` | Revoked access token | Remaining token lifetime |
+| `revoked_before:{user_id}` | Reject this user's tokens issued before this timestamp (suspension, logout everywhere) | Access-token lifetime (15 min): older tokens have expired by then |
 | `ratelimit:{scope}:{id}` | Token bucket state | Short (seconds to minutes) |
 | `login_fail:{email}` / `login_fail_ip:{ip}` | Failed login counters | 15 min |
 | `jwks:cache` | Cached public keys (optional) | 10 min |
@@ -1452,3 +1559,39 @@ Vector size must match the embedding model (384 for all-MiniLM-L6-v2). Retrieval
 | Delete SENT notification_log rows older than 90 days | Notification | Weekly |
 
 Run them as Celery beat tasks or simple scheduled scripts in each service.
+
+# Appendix F — Architecture decisions (week-1 review)
+
+## F.1 API composition: BFF + replicas, never the gateway
+| Option | Verdict |
+| --- | --- |
+| Gateway joins data | **No.** Puts business logic (which fields, how to merge, what to do on partial failure) into infrastructure, couples the gateway to every service's schema, and rules out stock gateways. |
+| BFF service (`bff_web`) | **Yes, for screens that need several services and fresh data.** Ordinary, testable code; forwards the user's token so services still enforce permissions. |
+| Local replicas (CQRS) | **Yes, for hot paths.** E.g. Application keeps `job_replica` and a `candidate_name` snapshot so the recruiter board is one query. |
+
+## F.2 Kafka vs Temporal
+| | Temporal (orchestration) | Kafka (choreography) |
+| --- | --- | --- |
+| Use when | A process with an owner must finish or compensate: ordered steps, retries, timeouts, rollback | A fact happened; any number of independent consumers react; nobody waits |
+| Examples | Job publishing saga; application processing; long AI jobs | UserRegistered → candidate profile; notifications; analytics; replicas; semantic indexing |
+| Debugging | Temporal UI by workflow ID: every step, input/output, retries, current step, error | Traces (event_id + trace context), consumer lag, DLQ, processed_events |
+| Key metrics | Started/completed/failed per type, activity retries, schedule-to-start latency, duration | Consumer lag, DLQ size, outbox backlog, throughput |
+
+Rule of thumb: if you'd need to answer "which step is this process on, and why?", use Temporal. If you're announcing something others may care about, use Kafka. They chain: an outbox event on Kafka can start a workflow (`JobPublishRequested`). One OpenTelemetry trace ID links both.
+
+## F.3 Token revocation: who writes, who enforces
+1. Admin calls Identity: `POST /auth/revoke/{jti}` (one token), or suspends a user / the user does logout-all.
+2. **Identity is the only writer:** `denylist:{jti}` and `revoked_before:{user_id}` in Redis, TTL = access-token lifetime.
+3. **The gateway enforces at the edge:** after verifying the signature locally (JWKS, no call to Identity) it checks Redis; a revoked token gets 401 at the gateway and never reaches any service.
+4. **Services check again** (chassis `verify_token`), for traffic that bypasses the gateway (rule 7).
+5. Redis unavailable → 503 at both layers (fail closed).
+6. Refresh tokens are revoked in Identity's database (logout, reuse detection), so a revoked session can't mint new access tokens.
+
+## F.4 Gateway product
+Apache APISIX (open source, Apache 2.0), standalone mode with YAML config in git. Chosen because its open-source edition verifies JWTs against a JWKS endpoint (`openid-connect`, `bearer_only`, `use_jwks`), shares rate-limit counters in Redis (`limit-count`, `policy: redis`), supports custom Lua plugins (denylist), request IDs, path rewriting and SSE. Alternatives considered: Kong OSS (JWT plugin needs manually uploaded keys; JWKS requires the paid OIDC plugin), Traefik (no built-in JWT verification; needs ForwardAuth to a verifier service), Envoy (capable but verbose, separate rate-limit service). Plugin behaviour differs between APISIX versions: pin the version and verify in the Step 4.1 spike.
+
+## F.5 AI Assistant: online vs offline
+- **Online:** interactive questions, streamed over SSE; only retrieval at question time; strict timeout and circuit breaker.
+- **Offline (background):** long jobs return 202 + job id and run as Temporal workflows in batches.
+- **Offline (prepared ahead):** embeddings are computed when jobs/resumes change (Phase 15), not when someone asks.
+- **Degraded:** LLM provider down → breaker opens, 503 with a clear message, non-LLM fallbacks where possible; hiring flows never depend on the LLM.

@@ -46,6 +46,8 @@ services:
       DB_SCHEMA: identity
       REDIS_URL: redis://redis:6379/0
       JWT_PRIVATE_KEY_PATH: /run/secrets/identity/jwt_private.pem
+      # Browsers reach Identity through the gateway, so the cookie must match the PUBLIC path
+      REFRESH_COOKIE_PATH: /api/identity/auth
     volumes:
       # Dev key from `make keys` (gitignored). Read-only inside the container.
       - ./secrets/identity:/run/secrets/identity:ro
