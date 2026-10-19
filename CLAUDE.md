@@ -85,7 +85,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 2 Identity (2.1–2.11): 30 tests pass; live checks in Compose verified (register/409, login cookie flags, JWKS verify, rotation + reuse detection, 401/403, 429)
 - [x] Phase 3 Shared auth in chassis: [x] 3.1 JWKS client + verify_token + deps · [x] 3.2 ensure_owner
 - [x] Phase 4 Gateway (APISIX, revision 2): [x] 4.1 spike · [x] 4.2 routes/request IDs/XFF · [x] 4.3 JWT + revocation at edge · [x] 4.4 rate limiting · [x] 4.5 SSE · [x] 4.6 metrics hooks
-- [ ] Phase 5 Job service
+- [x] Phase 5 Job service: [x] 5.1 scaffold + models · [x] 5.2 state machine · [x] 5.3 CRUD · [x] 5.4 publish stub
 - [ ] Phase 6 Candidate service
 - [ ] Phase 7 Kafka + outbox
 - [ ] Phase 8 Application service
@@ -100,7 +100,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit Phase 4 (`feat(gateway): add APISIX gateway with JWT, revocation, rate limiting, request IDs`), then Phase 5 (Job service).
+**Next step:** commit Phase 5 (see suggested commits in the last session), then Phase 6 (Candidate service).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -260,3 +260,39 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - Gateway tests: `make test-gateway` (needs `make up`): tests/gateway/test_gateway.py, 9 tests, prove
   edge rejection by checking a unique X-Request-ID never reaches Identity's logs. Login route limit is
   30/min/IP: running many logins quickly (tests + manual curls) can hit it; wait a minute.
+- MIGRATION NAMING RULE (bug found in 5.1): in hand-written migrations, wrap explicit CHECK names in
+  `op.f("ck_<table>_<name>")`. A plain `name="ck_users_role"` gets the naming convention applied on top
+  -> `ck_users_ck_users_role` (happened in Identity 0001; fixed by Identity 0003 rename, since 0001 had
+  already run). pk/fk/uq/ix names are unaffected (their convention doesn't use the given name).
+  `alembic check` does NOT compare CHECK constraints, so every service has a test comparing the
+  schema's EXACT constraint/index names to Appendix E (`smarthire_common.testing.schema_object_names`).
+- Shared test helpers: `smarthire_common/testing.py` (`service_postgres(service)` = Postgres with the
+  service's own user + schema like init.sh; `redis_container()`; `alembic_config(...)`; `truncate`,
+  `flush_redis`, `run`, `schema_object_names`). Imports testcontainers/alembic lazily: services keep
+  `testcontainers[postgres,redis]` in their dev group. Identity's conftest uses it.
+- After a failed commit/rollback in async SQLAlchemy, ORM objects are stale and touching an attribute
+  raises MissingGreenlet: copy ids into plain variables first (tests and service code alike).
+- Step 5.1: `services/job` (port 8002, schema/user `job`/`job_user`), models `Job`, `JobStage`
+  (app/models/job.py) per E.5, migration 0001 applied to the dev DB. No endpoints yet; auth wiring
+  (init_auth + JWKSClient + init_redis for the denylist) arrives in 5.3.
+- Phase 5 (5.2-5.4) was built in one pass at the user's request (one-off, like Phases 2 and 4).
+- Job state machine: `app/domain/job.py` (`ALLOWED_TRANSITIONS` table = the plan's arrows; EDITABLE =
+  DRAFT/FAILED/READY; editing READY -> PROCESSING (re-processing, Phase 9); publish only from DRAFT/FAILED
+  (READY -> 409); close only from READY; CLOSED final). Stage rules: 1-20 stages, unique ignoring case,
+  position = list index. Skills normalized lowercase/unique. Domain errors are chassis AppError subclasses
+  (409 INVALID_JOB_TRANSITION / JOB_NOT_EDITABLE / VERSION_CONFLICT, 422 INVALID_STAGES).
+- Job API: `POST /jobs` (RECRUITER, 201 DRAFT), `GET /jobs` (public board, READY only, keyset cursor
+  pagination `?limit&cursor`, filter employment_type), `GET /jobs?mine=true[&status=]` (recruiter's own,
+  any status), `GET /jobs/{id}`, `PUT /jobs/{id}` (full replace + `version` optimistic lock, stages
+  replaced), `POST /jobs/{id}/publish` (202, stays PROCESSING until Phase 9), `POST /jobs/{id}/close`.
+  Visibility: READY/CLOSED visible to anyone; DRAFT/PROCESSING/FAILED only to the owner, 404 for everyone
+  else (ids of unpublished jobs can't be probed); writes on someone else's published job -> 403.
+  `eligibility_rules` is a strict Pydantic model (only `min_experience_years` for now; Application uses
+  it in Phase 8; unknown keys -> 422). TODO markers in app/services/jobs.py for Phase 7.7 (JobUpdated,
+  JobClosed outbox) and Phase 9.5 (JobPublishRequested).
+- Chassis additions: `auth.get_optional_user` (no header -> None, bad token -> 401, never anonymous) and
+  `testing.TokenFactory` (test RSA key; `key_provider` for `create_app(settings, key_provider=...)`,
+  `headers(role=..., user_id=...)`). Services' create_app takes `key_provider` for tests; production uses
+  `JWKSClient(settings.jwks_url)` + `init_redis` (denylist). Job's readiness checks database + redis.
+- GET /api/jobs is public at the gateway, so Job's own token check is what rejects revoked tokens there
+  (verified live: rule 7 in action).

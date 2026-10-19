@@ -67,6 +67,30 @@ services:
       timeout: 3s
       retries: 5
 
+  job:
+    build:
+      context: .                                   # repo root: the image needs libs/ too
+      dockerfile: services/job/Dockerfile
+    environment:
+      SERVICE_NAME: job
+      PORT: "8002"
+      DATABASE_URL: postgresql+asyncpg://job_user:${JOB_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_SCHEMA: job
+      REDIS_URL: redis://redis:6379/0              # token denylist (Identity writes, we read)
+      FORWARDED_ALLOW_IPS: 172.30.0.10             # trust X-Forwarded-For only from the gateway
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:                                   # slim image has no curl, so use python
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   gateway:
     image: apache/apisix:3.19.0-debian               # pinned: upgrades are a deliberate change
     volumes:

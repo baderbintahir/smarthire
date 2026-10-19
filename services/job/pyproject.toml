@@ -1,0 +1,29 @@
+[project]
+name = "smarthire-job"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "smarthire-common",
+    "uvicorn[standard]>=0.30",
+    "alembic>=1.13",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "testcontainers[postgres,redis]>=4.8",  # real Postgres/Redis for tests (smarthire_common.testing)
+]
+
+[tool.uv]
+package = false  # an application, not an installable library
+
+[tool.uv.sources]
+# Relative path: works on the host AND in the image (Dockerfile mirrors this layout)
+smarthire-common = { path = "../../libs/smarthire_common", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]  # the service is not an installed package: make `import app` work under plain `pytest`
+asyncio_mode = "auto"
