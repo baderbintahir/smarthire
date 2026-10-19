@@ -91,6 +91,67 @@ services:
       timeout: 3s
       retries: 5
 
+  minio:
+    # Community fork of MinIO: the official minio/minio images are no longer published. Pinned.
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000"                                # S3 API
+      - "9001:9001"                                # web console: http://localhost:9001
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio-init:                                      # one-shot: bucket + least-privilege user, then exits
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z  # same image: it ships the `mc` client
+    entrypoint: ["sh", "/init/init.sh"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      CANDIDATE_S3_ACCESS_KEY: ${CANDIDATE_S3_ACCESS_KEY}
+      CANDIDATE_S3_SECRET_KEY: ${CANDIDATE_S3_SECRET_KEY}
+    volumes:
+      - ./infra/minio:/init:ro
+    depends_on:
+      minio:
+        condition: service_healthy
+
+  candidate:
+    build:
+      context: .                                   # repo root: the image needs libs/ too
+      dockerfile: services/candidate/Dockerfile
+    environment:
+      SERVICE_NAME: candidate
+      PORT: "8004"
+      DATABASE_URL: postgresql+asyncpg://candidate_user:${CANDIDATE_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_SCHEMA: candidate
+      REDIS_URL: redis://redis:6379/0              # token denylist (Identity writes, we read)
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${CANDIDATE_S3_ACCESS_KEY}    # the service's own MinIO user (resumes bucket only)
+      S3_SECRET_KEY: ${CANDIDATE_S3_SECRET_KEY}
+      FORWARDED_ALLOW_IPS: 172.30.0.10             # trust X-Forwarded-For only from the gateway
+    ports:
+      - "8004:8004"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully  # bucket and user exist before we start
+    healthcheck:                                   # slim image has no curl, so use python
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   gateway:
     image: apache/apisix:3.19.0-debian               # pinned: upgrades are a deliberate change
     volumes:
@@ -115,6 +176,7 @@ services:
 volumes:
   pgdata:
   redisdata:
+  miniodata:
 
 networks:
   default:

@@ -86,7 +86,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 3 Shared auth in chassis: [x] 3.1 JWKS client + verify_token + deps · [x] 3.2 ensure_owner
 - [x] Phase 4 Gateway (APISIX, revision 2): [x] 4.1 spike · [x] 4.2 routes/request IDs/XFF · [x] 4.3 JWT + revocation at edge · [x] 4.4 rate limiting · [x] 4.5 SSE · [x] 4.6 metrics hooks
 - [x] Phase 5 Job service: [x] 5.1 scaffold + models · [x] 5.2 state machine · [x] 5.3 CRUD · [x] 5.4 publish stub
-- [ ] Phase 6 Candidate service
+- [x] Phase 6 Candidate service: [x] 6.1 scaffold + models + MinIO · [x] 6.2 profile endpoints · [x] 6.3 resume upload (60 tests + 12 gateway tests pass; live: files in bucket, rows in DB, 415/413 at service, 413 at gateway, anonymous GET 403)
 - [ ] Phase 7 Kafka + outbox
 - [ ] Phase 8 Application service
 - [ ] Phase 9 Temporal + job publishing saga
@@ -100,7 +100,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit Phase 5 (see suggested commits in the last session), then Phase 6 (Candidate service).
+**Next step:** commit Phase 6 if not done, then Phase 7 (Kafka + outbox), step by step again.
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -296,3 +296,39 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   `JWKSClient(settings.jwks_url)` + `init_redis` (denylist). Job's readiness checks database + redis.
 - GET /api/jobs is public at the gateway, so Job's own token check is what rejects revoked tokens there
   (verified live: rule 7 in action).
+- Phase 6 (6.1-6.3) was built in one pass at the user's request (one-off, like Phases 2, 4 and 5).
+- MinIO image: `pgsty/minio` (community fork, pinned RELEASE.2026-08-04T00-00-00Z). The official
+  `minio/minio` images are no longer published on Docker Hub (pulls fail) and quay.io was unreachable.
+  The image ships `mc`, so `minio-init` reuses it. Testcontainers' MinioContainer default image is the
+  dead one: tests pass the pgsty image explicitly.
+- MinIO setup: `infra/minio/init.sh` (one-shot `minio-init` container, idempotent, runs every `up`):
+  private bucket `resumes` (anonymous access none) + MinIO user for Candidate with policy
+  `infra/minio/candidate-resumes-policy.json` (Get/Put/Delete objects + List on `resumes` only). Root
+  creds are only for init and the console (http://localhost:9001). Env vars: MINIO_ROOT_USER,
+  MINIO_ROOT_PASSWORD, CANDIDATE_S3_ACCESS_KEY, CANDIDATE_S3_SECRET_KEY (values are made up by the user;
+  init.sh creates the user from them). Volume `miniodata`.
+  Phase 10's parser runs inside Candidate, so it reuses the same user (needs GetObject: already granted).
+- Candidate service: port 8004, schema/user `candidate`/`candidate_user`, models `Candidate`, `Resume`
+  (E.6; `candidates.id` = Identity user id, no FK). Settings `s3_endpoint` (minio:9000 in Compose),
+  `s3_access_key`/`s3_secret_key` (REQUIRED, so alembic env.py needs them too: tests pass them via
+  `alembic_config(extra_env=...)`), `resumes_bucket`, `max_resume_bytes` (5 MB). Readiness: database,
+  redis, storage (bucket_exists). Storage helper: `app/repositories/files.py` (sync minio client wrapped
+  in asyncio.to_thread). `app.state.settings` holds settings for routes.
+- Candidate API: `GET/PUT /candidates/me` (CANDIDATE; PUT = upsert via INSERT ... ON CONFLICT, full
+  replace, no version column: only the owner edits), `GET /candidates/me/resumes` (newest first, max 50),
+  `POST /candidates/me/resumes` (multipart field `file`; 202 UPLOADED), `GET /candidates/{id}` (self,
+  RECRUITER, ADMIN; other candidates 403 for any id). TODO(Phase 8): recruiters only for their own
+  applicants. Until Phase 7 creates profiles from UserRegistered, upload without a profile is 404
+  CANDIDATE_NOT_FOUND ("Create your profile first").
+- Resume upload rules: type from magic bytes (`%PDF-`, or a zip containing `[Content_Types].xml` +
+  `word/document.xml`), never the client's Content-Type/name -> 415 UNSUPPORTED_FILE_TYPE (also empty
+  files); > 5 MB -> 413 FILE_TOO_LARGE; file_name sanitized (display only); object key
+  `{candidate_id}/{resume_id}` in bucket `resumes`. Order: file to MinIO first, then one transaction
+  (SELECT candidate FOR UPDATE -> deactivate old -> insert new active -> commit); on DB failure the object
+  is deleted (best effort; a crash in between leaves an orphan file, harmless; cleanup job is a TODO).
+  Old resumes are kept (inactive). Without the row lock, concurrent uploads hit uq_resumes_one_active
+  (verified by removing the lock: IntegrityError); with it all succeed. TODO markers for Phase 7.7
+  (ResumeUploaded outbox) and Phase 10.2 (enqueue parse_resume).
+- Gateway: `client-control` plugin added (config.yaml plugin list); candidates route has
+  `max_body_size: 6291456` (6 MB) -> JSON 413 PAYLOAD_TOO_LARGE (error_page in config.yaml). Gateway test
+  for "service not deployed -> 503" now uses /api/applications.

@@ -77,7 +77,7 @@ def test_unknown_path_is_json_404():
 
 def test_service_not_deployed_is_json_503():
     _, token = new_user()  # authenticated route: the token is checked before the upstream is tried
-    r = httpx.get(f"{GATEWAY}/api/candidates/me", headers=bearer(token))  # no candidate service yet
+    r = httpx.get(f"{GATEWAY}/api/applications", headers=bearer(token))  # no application service yet
     assert r.status_code == 503
     assert r.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
 
@@ -87,6 +87,22 @@ def test_job_board_is_public_but_writes_need_a_token_at_the_gateway():
     rid = f"gw-test-{uuid.uuid4()}"
     r = httpx.post(f"{GATEWAY}/api/jobs", json={}, headers={"X-Request-ID": rid})
     assert r.status_code == 401 and r.json()["error"]["code"] == "INVALID_TOKEN"  # stopped at the edge
+
+
+def test_candidate_profile_and_resume_through_the_gateway():
+    _, token = new_user()
+    profile = {"full_name": "Jane Doe", "skills": ["Python"]}
+    assert httpx.put(f"{GATEWAY}/api/candidates/me", json=profile, headers=bearer(token)).status_code == 200
+    pdf = b"%PDF-1.4\n%%EOF\n"
+    r = httpx.post(f"{GATEWAY}/api/candidates/me/resumes", files={"file": ("cv.pdf", pdf)}, headers=bearer(token))
+    assert r.status_code == 202 and r.json()["status"] == "UPLOADED"
+
+
+def test_oversized_upload_is_stopped_at_the_gateway():
+    _, token = new_user()
+    big = b"%PDF-" + b"0" * (7 * 1024 * 1024)  # over the route's 6 MB body limit
+    r = httpx.post(f"{GATEWAY}/api/candidates/me/resumes", files={"file": ("cv.pdf", big)}, headers=bearer(token))
+    assert r.status_code == 413 and r.json()["error"]["code"] == "PAYLOAD_TOO_LARGE"
 
 
 def test_public_routes_need_no_token():

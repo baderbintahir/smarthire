@@ -152,6 +152,9 @@ routes:
     plugin_config_id: authenticated
     plugins:
       proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
+      # Stop oversized uploads at the edge (JSON 413) before they cost the service anything.
+      # 6 MB = the 5 MB resume limit + room for the multipart wrapping; the service checks 5 MB.
+      client-control: { max_body_size: 6291456 }
 
   - id: applications
     uris: [/api/applications, /api/applications/*]

@@ -26,6 +26,7 @@ nginx_config:
     error_page 502 @smarthire_502;
     error_page 503 @smarthire_503;
     error_page 504 @smarthire_504;
+    error_page 413 @smarthire_413;
     location @smarthire_502 {
       default_type application/json;
       return 502 '{"error":{"code":"BAD_GATEWAY","message":"The service is unavailable"}}';
@@ -34,6 +35,11 @@ nginx_config:
       # e.g. the service's name doesn't resolve (not deployed yet / no healthy node)
       default_type application/json;
       return 503 '{"error":{"code":"SERVICE_UNAVAILABLE","message":"The service is unavailable"}}';
+    }
+    location @smarthire_413 {
+      # body over the route's client-control max_body_size (e.g. a too-big resume upload)
+      default_type application/json;
+      return 413 '{"error":{"code":"PAYLOAD_TOO_LARGE","message":"The request body is too large"}}';
     }
     location @smarthire_504 {
       default_type application/json;
@@ -44,6 +50,7 @@ nginx_config:
 plugins:
   - request-id
   - proxy-rewrite
+  - client-control               # per-route request body size limit (resume uploads)
   - openid-connect
   - smarthire-denylist           # ours: revocation check after openid-connect
   - limit-count
