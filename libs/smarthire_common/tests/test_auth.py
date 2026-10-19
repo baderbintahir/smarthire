@@ -127,9 +127,24 @@ async def test_denylisted_token_is_401(static_auth, redis):
         await auth.verify_token(token)
 
 
+async def test_tokens_issued_before_revoked_before_are_401(static_auth, redis):
+    sub = str(uuid.uuid4())
+    now = int(datetime.now(UTC).timestamp())
+    old = make_token(sub=sub, iat=now - 60)  # issued a minute ago
+    same_second = make_token(sub=sub, iat=now)  # can't be told apart from "just before": rejected
+    newer = make_token(sub=sub, iat=now + 1)  # issued after the revocation (logged in again)
+    await redis.set(auth.revoked_before_key(sub), str(now))
+    for token in (old, same_second):
+        with pytest.raises(UnauthorizedError, match="revoked"):
+            await auth.verify_token(token)
+    assert (await auth.verify_token(newer))["sub"] == sub
+    other_user = make_token(iat=now - 60)
+    assert await auth.verify_token(other_user)  # only that user is affected
+
+
 async def test_redis_down_fails_closed_with_503(static_auth, monkeypatch):
     class DownRedis:
-        async def exists(self, *_):
+        async def mget(self, *_):
             raise RedisConnectionError("connection refused")
 
     monkeypatch.setattr(auth, "get_redis", lambda: DownRedis())

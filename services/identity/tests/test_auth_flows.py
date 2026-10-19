@@ -1,5 +1,7 @@
 """Component tests: the real app against real Postgres + Redis (see conftest.py)."""
 
+import time
+
 import jwt
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -208,6 +210,7 @@ def test_logout_all_kills_every_session_and_current_access_tokens(client):
     assert refresh_with(client, phone.cookies[COOKIE]).status_code == 401
     # token_version was bumped, so Identity rejects the old access token immediately
     assert client.get("/users/me", headers=bearer(access)).status_code == 401
+    time.sleep(1.1)  # a token issued in the same second as the revocation is rejected by design
     fresh = login(client).json()["access_token"]
     assert client.get("/users/me", headers=bearer(fresh)).status_code == 200
 
@@ -252,3 +255,69 @@ def test_ready_checks_database_and_redis(client):
     r = client.get("/health/ready")
     assert r.status_code == 200
     assert r.json()["checks"] == {"database": "ok", "redis": "ok"}
+
+
+def test_discovery_document_points_to_jwks(client, settings):
+    r = client.get("/.well-known/openid-configuration")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["issuer"] == settings.jwt_issuer
+    assert body["jwks_uri"].endswith("/.well-known/jwks.json")
+    assert body["id_token_signing_alg_values_supported"] == ["RS256"]
+
+
+# ---------- Phase 4.3: revocation keys for the gateway (Appendix F.3) ----------
+
+
+def redis_get(settings, key):
+    async def go():
+        from redis.asyncio import Redis
+
+        r = Redis.from_url(settings.redis_url, decode_responses=True)
+        try:
+            return await r.get(key), await r.ttl(key)
+        finally:
+            await r.aclose()
+
+    return run(go())
+
+
+def user_id_of(token: str) -> str:
+    return jwt.decode(token, options={"verify_signature": False})["sub"]
+
+
+def test_logout_all_writes_revoked_before_for_the_gateway(client, settings):
+    register(client)
+    token = login(client).json()["access_token"]
+    assert client.post("/auth/logout-all", headers=bearer(token)).status_code == 204
+    value, ttl = redis_get(settings, f"revoked_before:{user_id_of(token)}")
+    assert value is not None and int(value) >= jwt.decode(token, options={"verify_signature": False})["iat"]
+    assert 0 < ttl <= settings.access_token_ttl_seconds + 60  # gone once all old tokens expired
+
+
+def test_admin_suspends_user_everywhere(client, settings):
+    register(client)
+    victim = login(client)
+    victim_token, victim_cookie = victim.json()["access_token"], victim.cookies[COOKIE]
+    _create_admin(settings)
+    admin_token = login(client, "admin@example.com").json()["access_token"]
+
+    r = client.post(f"/users/{user_id_of(victim_token)}/suspend", headers=bearer(admin_token))
+    assert r.status_code == 204
+    assert redis_get(settings, f"revoked_before:{user_id_of(victim_token)}")[0] is not None  # gateway + services
+    assert client.get("/users/me", headers=bearer(victim_token)).status_code == 401  # current token dead
+    assert refresh_with(client, victim_cookie).status_code == 401  # sessions ended
+    assert login(client).json()["error"]["code"] == "ACCOUNT_SUSPENDED"  # can't log back in
+
+
+def test_suspend_rules(client, settings):
+    register(client)
+    candidate_token = login(client).json()["access_token"]
+    _create_admin(settings)
+    admin_token = login(client, "admin@example.com").json()["access_token"]
+    admin_id = user_id_of(admin_token)
+
+    assert client.post(f"/users/{admin_id}/suspend", headers=bearer(candidate_token)).status_code == 403
+    assert client.post(f"/users/{admin_id}/suspend", headers=bearer(admin_token)).status_code == 409  # not yourself
+    unknown = "01a1392c-0000-7000-8000-000000000000"
+    assert client.post(f"/users/{unknown}/suspend", headers=bearer(admin_token)).status_code == 404

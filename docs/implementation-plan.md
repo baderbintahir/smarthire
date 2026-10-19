@@ -453,7 +453,7 @@ Run APISIX (pinned version) in standalone mode with one route to Identity. Prove
 - `openid-connect` plugin on protected routes: `bearer_only: true`, `use_jwks: true`, issuer/audience pinned. Public routes (register, login, refresh, logout, JWKS, discovery) have no auth plugin.
 - **Revocation at the edge (Appendix F.3):** a small custom APISIX plugin (`infra/apisix/plugins/smarthire-denylist.lua`) checks Redis after signature verification:
   - `denylist:{jti}` (single token revoked by an admin), and
-  - `revoked_before:{user_id}` (user suspended or "logout everywhere": tokens issued before this timestamp are rejected).
+  - `revoked_before:{user_id}` (user suspended or "logout everywhere": tokens issued at or before this second are rejected; `iat` has 1-second resolution).
   - Redis unavailable → **503** (fail closed), never let an unchecked token through.
 - Identity writes `revoked_before:{user_id}` (TTL = access-token lifetime) on logout-all and when an admin suspends a user. The chassis `verify_token` checks the same key, so services keep enforcing it too (rule 7: defence in depth).
 
@@ -464,12 +464,12 @@ Run APISIX (pinned version) in standalone mode with one route to Identity. Prove
 **Check your understanding:** Why check the denylist at the gateway if services check it too? Why does `revoked_before` only need a TTL of 15 minutes?
 
 ### Step 4.4 — Rate limiting
-`limit-count` with `policy: redis` so all APISIX instances share counters. Per user (JWT `sub`) on protected routes, per IP on public routes, stricter on `/api/identity/auth/login`. Return 429 with `Retry-After`.
+`limit-count` with `policy: redis` so all APISIX instances share counters. Per user (JWT `sub`) on protected routes, per IP on public routes, stricter on `/api/identity/auth/login`. Return 429 with `Retry-After` (limit-count only sends `X-RateLimit-Reset`, so a small global plugin copies it, rounded up). If Redis is down, rate limiting degrades (`allow_degradation`) while revocation still fails closed.
 
 **Done when:** hammering an endpoint returns 429; two APISIX replicas share the same limit.
 
 ### Step 4.5 — Streaming pass-through
-Disable response buffering on `/api/assistant/*` so Server-Sent Events stream through (needed in Phase 16).
+Make sure Server-Sent Events on `/api/assistant/*` stream through unbuffered (needed in Phase 16). Verified on APISIX 3.19.0: no extra configuration needed; the upstream read timeout is raised to 300 s for long answers.
 
 **Done when:** a test SSE endpoint streams events through APISIX one by one, not all at the end.
 
@@ -1543,7 +1543,7 @@ Vector size must match the embedding model (384 for all-MiniLM-L6-v2). Retrieval
 | --- | --- | --- |
 | `idem:{user_id}:{key}` | Cached response for an Idempotency-Key | 24 h |
 | `denylist:{jti}` | Revoked access token | Remaining token lifetime |
-| `revoked_before:{user_id}` | Reject this user's tokens issued before this timestamp (suspension, logout everywhere) | Access-token lifetime (15 min): older tokens have expired by then |
+| `revoked_before:{user_id}` | Reject this user's tokens issued at or before this unix second (suspension, logout everywhere) | Access-token lifetime (15 min): older tokens have expired by then |
 | `ratelimit:{scope}:{id}` | Token bucket state | Short (seconds to minutes) |
 | `login_fail:{email}` / `login_fail_ip:{ip}` | Failed login counters | 15 min |
 | `jwks:cache` | Cached public keys (optional) | 10 min |

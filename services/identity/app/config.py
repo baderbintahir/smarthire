@@ -15,6 +15,9 @@ class Settings(BaseServiceSettings):
     jwt_private_key_path: Path
     jwt_issuer: str = "smarthire-identity"  # "iss": who issued the token
     jwt_audience: str = "smarthire"  # "aud": who the token is meant for
+    # Where verifiers (the gateway) fetch our public keys; published in the discovery document.
+    # Internal Compose address: only the gateway and services read it.
+    jwks_public_url: str = "http://identity:8001/.well-known/jwks.json"
     access_token_ttl_seconds: int = 15 * 60
 
     # --- Refresh tokens (httpOnly cookie) ---

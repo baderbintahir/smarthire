@@ -35,8 +35,15 @@ ALGORITHM = "RS256"
 
 
 def denylist_key(jti: str) -> str:
-    """Appendix E.13. Identity writes these keys; every verifier reads them."""
+    """Appendix E.13: one revoked access token. Identity writes it; every verifier
+    (gateway + services) reads it."""
     return f"denylist:{jti}"
+
+
+def revoked_before_key(user_id: str) -> str:
+    """Appendix E.13: reject this user's tokens issued AT OR BEFORE the stored unix time
+    (account suspended, or "logout everywhere"). Identity writes it; every verifier reads it."""
+    return f"revoked_before:{user_id}"
 
 
 # ---------- where public keys come from ----------
@@ -189,12 +196,18 @@ async def verify_token(token: str) -> dict:
         raise invalid from None
 
     try:
-        revoked = await get_redis().exists(denylist_key(claims["jti"]))
+        # One round trip for both revocation keys
+        denied, revoked_before = await get_redis().mget(
+            [denylist_key(claims["jti"]), revoked_before_key(claims["sub"])]
+        )
     except RedisError:
         # Fail CLOSED: if we can't check the denylist, a revoked token could slip through
         logger.exception("Denylist check failed")
         raise ServiceUnavailableError("Token verification is temporarily unavailable") from None
-    if revoked:
+    # "<=": iat has 1-second resolution, so a token issued in the SAME second as the revocation
+    # can't be told apart from one issued just before it; reject both (security over convenience:
+    # logging in again within that same second needs one retry)
+    if denied is not None or (revoked_before is not None and claims["iat"] <= int(revoked_before)):
         raise UnauthorizedError("Token has been revoked")
     return claims
 

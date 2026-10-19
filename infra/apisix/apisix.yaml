@@ -1,0 +1,203 @@
+# APISIX routes (standalone mode, Phase 4). APISIX reloads this file when it changes.
+# Edit IN PLACE: this file is bind-mounted on its own, and tools that replace the file
+# (new inode) are not seen by the container until `docker compose restart gateway`.
+#
+# The gateway only does edge work: routing, auth, revocation, rate limits, request IDs.
+# No business logic and no joining data from several services (that's the BFF, Phase 12B).
+
+# ---------------------------------------------------------------- upstreams (the services)
+# Services that don't exist yet simply answer 502 until they are added to Compose.
+upstreams:
+  - id: identity
+    type: roundrobin
+    nodes: { "identity:8001": 1 }
+    timeout: { connect: 2, send: 30, read: 30 }
+  - id: job
+    type: roundrobin
+    nodes: { "job:8002": 1 }
+    timeout: { connect: 2, send: 30, read: 30 }
+  - id: candidate
+    type: roundrobin
+    nodes: { "candidate:8004": 1 }
+    timeout: { connect: 2, send: 60, read: 60 }      # resume uploads
+  - id: application
+    type: roundrobin
+    nodes: { "application:8005": 1 }
+    timeout: { connect: 2, send: 30, read: 30 }
+  - id: analytics
+    type: roundrobin
+    nodes: { "analytics:8008": 1 }
+    timeout: { connect: 2, send: 30, read: 30 }
+  - id: ai_assistant
+    type: roundrobin
+    nodes: { "ai_assistant:8010": 1 }
+    timeout: { connect: 2, send: 30, read: 300 }     # streamed answers can run for minutes
+  - id: bff_web
+    type: roundrobin
+    nodes: { "bff_web:8011": 1 }
+    timeout: { connect: 2, send: 30, read: 30 }
+
+# ---------------------------------------------------------------- reusable plugin bundles
+plugin_configs:
+  # Protected routes: verify the JWT, check revocation, then rate-limit per user.
+  - id: authenticated
+    plugins:
+      openid-connect:
+        _meta:
+          error_response:                         # our JSON error shape instead of nginx HTML
+            error: { code: INVALID_TOKEN, message: "Missing, invalid or expired token" }
+        # client_id doubles as the expected audience (match_with_client_id) = jwt_audience
+        client_id: smarthire
+        client_secret: unused-bearer-only       # required by the schema; unused for bearer-only
+        discovery: http://identity:8001/.well-known/openid-configuration
+        bearer_only: true                       # only check the Authorization header, never redirect
+        use_jwks: true                          # verify signatures locally with the published keys
+        iat_slack: 10                           # clock skew, same as our services (default is 120!)
+        set_access_token_header: false          # services read the original Authorization header
+        set_userinfo_header: false
+        claim_validator:
+          issuer: { valid_issuers: [smarthire-identity] }    # pinned, not taken from discovery
+          audience: { match_with_client_id: true }            # off by default!
+      smarthire-denylist:                       # revocation (needs openid-connect before it)
+        redis_host: redis
+      limit-count:                              # per user, counters shared by every gateway node
+        _meta:
+          error_response:
+            error: { code: TOO_MANY_REQUESTS, message: "Too many requests" }
+        count: 300
+        time_window: 60
+        key_type: var
+        key: smarthire_user_id                  # set by smarthire-denylist from the verified token
+        policy: redis
+        redis_host: redis
+        rejected_code: 429
+        allow_degradation: true                 # Redis down: skip counting, don't fail requests
+
+  # Public routes: no token, rate-limit per client IP.
+  - id: public
+    plugins:
+      limit-count:
+        _meta:
+          error_response:
+            error: { code: TOO_MANY_REQUESTS, message: "Too many requests" }
+        count: 120
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        policy: redis
+        redis_host: redis
+        rejected_code: 429
+        allow_degradation: true                 # Redis down: skip counting, don't fail requests
+
+# ---------------------------------------------------------------- routes
+# More specific paths win over prefixes (e.g. /api/identity/auth/login over /api/identity/*).
+routes:
+  # --- Identity: whole prefix stripped (its own paths are /auth, /users, /.well-known)
+  - id: identity-login
+    uri: /api/identity/auth/login
+    methods: [POST]
+    upstream_id: identity
+    plugins:
+      proxy-rewrite: { uri: /auth/login }
+      limit-count:                              # stricter: slows password guessing per IP
+        _meta:
+          error_response:
+            error: { code: TOO_MANY_REQUESTS, message: "Too many login attempts" }
+        count: 30
+        time_window: 60
+        key_type: var
+        key: remote_addr
+        policy: redis
+        redis_host: redis
+        rejected_code: 429
+        allow_degradation: true                 # Redis down: skip counting, don't fail requests
+
+  - id: identity-public
+    uris:
+      - /api/identity/auth/register
+      - /api/identity/auth/refresh
+      - /api/identity/auth/logout                # must work with an expired access token
+      - /api/identity/.well-known/*              # JWKS + discovery
+    upstream_id: identity
+    plugin_config_id: public
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/identity/(.*)", "/$1"] }
+
+  - id: identity-protected                      # /users/*, /auth/logout-all, /auth/revoke/*, ...
+    uri: /api/identity/*
+    upstream_id: identity
+    plugin_config_id: authenticated
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/identity/(.*)", "/$1"] }
+
+  # --- Other services: only /api stripped (each owns a resource-named path: /jobs, ...)
+  - id: jobs-public-read                        # public job board; the service handles optional
+    uris: [/api/jobs, /api/jobs/*]              # auth itself (recruiters see their own drafts)
+    methods: [GET]
+    upstream_id: job
+    plugin_config_id: public
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
+
+  - id: jobs
+    uris: [/api/jobs, /api/jobs/*]
+    upstream_id: job
+    plugin_config_id: authenticated
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
+
+  - id: candidates
+    uris: [/api/candidates, /api/candidates/*]
+    upstream_id: candidate
+    plugin_config_id: authenticated
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
+
+  - id: applications
+    uris: [/api/applications, /api/applications/*]
+    upstream_id: application
+    plugin_config_id: authenticated
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
+
+  - id: analytics
+    uris: [/api/analytics, /api/analytics/*]
+    upstream_id: analytics
+    plugin_config_id: authenticated
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
+
+  - id: assistant                                # SSE: see Step 4.5 notes in CLAUDE.md
+    uris: [/api/assistant, /api/assistant/*]
+    upstream_id: ai_assistant
+    plugin_config_id: authenticated
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
+
+  - id: bff
+    uris: [/api/bff, /api/bff/*]
+    upstream_id: bff_web
+    plugin_config_id: authenticated
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
+
+  # --- Anything else: our JSON 404 instead of APISIX's {"error_msg": "404 Route Not Found"}
+  - id: not-found
+    uri: /*
+    priority: -100
+    plugins:
+      mocking:
+        response_status: 404
+        content_type: application/json
+        response_example: '{"error":{"code":"NOT_FOUND","message":"No service handles this path"}}'
+
+# ---------------------------------------------------------------- applied to every request
+global_rules:
+  - id: edge
+    plugins:
+      request-id:
+        header_name: X-Request-ID               # reuse the client's id, or generate one
+        include_in_response: true
+      prometheus: {}                            # per-route metrics on :9091 (Phase 13)
+      smarthire-retry-after: {}
+#END

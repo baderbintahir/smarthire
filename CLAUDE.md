@@ -84,7 +84,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 1 Foundation: [x] 1.1 compose pg+redis · [x] 1.2 chassis skeleton · [x] 1.3 db+health · [x] 1.4 service template · [x] 1.5 Makefile
 - [x] Phase 2 Identity (2.1–2.11): 30 tests pass; live checks in Compose verified (register/409, login cookie flags, JWKS verify, rotation + reuse detection, 401/403, 429)
 - [x] Phase 3 Shared auth in chassis: [x] 3.1 JWKS client + verify_token + deps · [x] 3.2 ensure_owner
-- [ ] Phase 4 Gateway (APISIX, revision 2): 4.1 spike · 4.2 routes/request IDs/XFF · 4.3 JWT + revocation at edge · 4.4 rate limiting · 4.5 SSE · 4.6 metrics hooks (one commit at end)
+- [x] Phase 4 Gateway (APISIX, revision 2): [x] 4.1 spike · [x] 4.2 routes/request IDs/XFF · [x] 4.3 JWT + revocation at edge · [x] 4.4 rate limiting · [x] 4.5 SSE · [x] 4.6 metrics hooks
 - [ ] Phase 5 Job service
 - [ ] Phase 6 Candidate service
 - [ ] Phase 7 Kafka + outbox
@@ -100,7 +100,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit the plan revision, then Phase 4 (revised), Step 4.1: APISIX spike.
+**Next step:** commit Phase 4 (`feat(gateway): add APISIX gateway with JWT, revocation, rate limiting, request IDs`), then Phase 5 (Job service).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -210,3 +210,53 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   - API composition in new `services/bff_web` (Phase 12B, port 8011, no DB), forwarding the user's token.
   - Phase 13 adds APISIX telemetry and Kafka-vs-Temporal observability; Phase 16 adds online/offline/
     degraded paths for the AI Assistant.
+- Step 4.1 APISIX spike (pinned `apache/apisix:3.19.0-debian`, standalone YAML): config in
+  `infra/apisix/config.yaml` (node config; restart to apply) and `infra/apisix/apisix.yaml` (routes;
+  hot-reloaded, must end with `#END`). Edit apisix.yaml IN PLACE (same inode): it is a single-file bind
+  mount, so tools that replace the file aren't seen until `docker compose restart gateway`. Custom Lua
+  plugins: `infra/apisix/plugins/<name>.lua` (mounted at /usr/local/apisix/custom/apisix/plugins,
+  `extra_lua_path`), and must be listed under `plugins:` in config.yaml (that list REPLACES defaults).
+  `stream_plugins: []` avoids a 3.19.0 startup error from the default stream `syslog` plugin.
+  Verified on 3.19.0: proxy-rewrite (regex_uri), request-id (reuses client X-Request-ID, else generates;
+  Identity logs the same id), hot reload, custom Lua plugin loading, limit-count policy=redis (key
+  `plugin-limit-count:v1:/routes/<id>:...`), openid-connect bearer_only+use_jwks via Identity's NEW
+  `/.well-known/openid-configuration` (setting `jwks_public_url`).
+  openid-connect GOTCHAS (must use in 4.3): audience is NOT checked by default -> set
+  `client_id: smarthire` + `claim_validator.audience.match_with_client_id: true` (wrong aud then returns
+  403, not 401: plugin's choice); default `iat_slack` is 120 s and also applies to exp -> set
+  `iat_slack: 10`; pin `claim_validator.issuer.valid_issuers: [smarthire-identity]`. Errors are nginx
+  HTML unless the plugin has `_meta.error_response` (our JSON error shape works there). TLS warning for
+  http discovery is expected inside Compose.
+- Phase 4 (4.2-4.6) was built in one pass at the user's request (one-off, like Phase 2).
+- Gateway layout: `infra/apisix/apisix.yaml` has `upstreams` (one per service, by Compose name),
+  `plugin_configs` `authenticated` (openid-connect -> smarthire-denylist -> limit-count 300/min/user)
+  and `public` (limit-count 120/min/IP), routes (identity-login 30/min/IP; identity-public: register,
+  refresh, logout, .well-known/*; identity-protected: rest of /api/identity/*; jobs GET public
+  (service does optional auth), all other /api/<svc>/* authenticated), JSON 404 catch-all (mocking),
+  and `global_rules` (request-id, prometheus, smarthire-retry-after). Adding a service = add its
+  upstream + route; nothing else.
+- Custom plugins: `smarthire-denylist.lua` (priority 2590, after openid-connect 2599; checks
+  `denylist:{jti}` and `revoked_before:{sub}` with MGET; 503 if Redis down; registers var
+  `smarthire_user_id` for per-user limits) and `smarthire-retry-after.lua` (429 -> Retry-After =
+  ceil(X-RateLimit-Reset)). Lua plugin CODE changes need `docker compose restart gateway`
+  (apisix.yaml route changes hot-reload; config.yaml changes need restart too).
+- Error shapes at the gateway: nginx error_page snippet in config.yaml -> JSON 502 (refused), 503
+  (name doesn't resolve / not deployed), 504 (read timeout); plugins use `_meta.error_response`.
+  Wrong-audience tokens get 403 (openid-connect's choice), body code INVALID_TOKEN.
+- Revocation keys: `revoked_before:{user_id}` = unix second; tokens with iat <= value are rejected
+  (chassis AND Lua; "<=" because iat has 1 s resolution: re-login in the same second needs a retry).
+  Identity writes it (TTL access ttl + 60 s) on logout-all and NEW admin endpoint
+  `POST /users/{id}/suspend` (status SUSPENDED, refresh tokens revoked, token_version bumped; Redis
+  written BEFORE commit = safe direction). Redis write failure -> 503.
+- Rate limits use `allow_degradation: true` (Redis down -> no counting, requests pass); revocation
+  stays fail-closed (503) on protected routes.
+- Network: Compose default network subnet 172.30.0.0/24; gateway fixed at 172.30.0.10. Services set
+  `FORWARDED_ALLOW_IPS=172.30.0.10` so uvicorn takes the client IP from X-Forwarded-For only from the
+  gateway (template compose.snippet updated). Changing the network needs `docker compose down` + up.
+- Gateway healthcheck: bash /dev/tcp to the APISIX status API 127.0.0.1:7085/status/ready (no curl in
+  image). Prometheus metrics at gateway:9091 inside the network only (not published).
+- SSE streams through APISIX 3.19.0 unbuffered with no extra config (verified with a fake upstream);
+  assistant upstream read timeout 300 s.
+- Gateway tests: `make test-gateway` (needs `make up`): tests/gateway/test_gateway.py, 9 tests, prove
+  edge rejection by checking a unique X-Request-ID never reaches Identity's logs. Login route limit is
+  30/min/IP: running many logins quickly (tests + manual curls) can hit it; wait a minute.

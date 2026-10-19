@@ -48,6 +48,9 @@ services:
       JWT_PRIVATE_KEY_PATH: /run/secrets/identity/jwt_private.pem
       # Browsers reach Identity through the gateway, so the cookie must match the PUBLIC path
       REFRESH_COOKIE_PATH: /api/identity/auth
+      # Uvicorn takes the client IP from X-Forwarded-For ONLY when the request comes from the
+      # gateway's fixed address; from anyone else the header is ignored (it could be forged)
+      FORWARDED_ALLOW_IPS: 172.30.0.10
     volumes:
       # Dev key from `make keys` (gitignored). Read-only inside the container.
       - ./secrets/identity:/run/secrets/identity:ro
@@ -64,6 +67,33 @@ services:
       timeout: 3s
       retries: 5
 
+  gateway:
+    image: apache/apisix:3.19.0-debian               # pinned: upgrades are a deliberate change
+    volumes:
+      - ./infra/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./infra/apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro   # routes (standalone mode)
+      - ./infra/apisix/plugins:/usr/local/apisix/custom/apisix/plugins:ro  # our Lua plugins
+    ports:
+      - "8000:9080"                                  # the one public entry point
+    # :9091 (Prometheus metrics) is reachable inside the Compose network only, not published
+    networks:
+      default:
+        ipv4_address: 172.30.0.10                    # fixed: services trust X-Forwarded-For from it
+    depends_on:
+      redis:
+        condition: service_healthy                   # rate-limit counters and denylist live there
+    healthcheck:                                     # no curl in the image: bash's /dev/tcp instead
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/7085 && printf 'GET /status/ready HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q ' 200 '"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
 volumes:
   pgdata:
   redisdata:
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24                      # fixed range so the gateway can have a fixed IP

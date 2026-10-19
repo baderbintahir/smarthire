@@ -8,6 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 from smarthire_common.models import new_id
 
@@ -21,6 +22,7 @@ from app.domain.errors import (
 from app.models import RefreshToken, User
 from app.repositories import refresh_tokens as tokens_repo
 from app.repositories import users as users_repo
+from app.services import admin
 from app.services.login_rate_limiter import LoginRateLimiter
 
 logger = logging.getLogger(__name__)
@@ -154,9 +156,10 @@ async def logout(session: AsyncSession, *, refresh_token: str | None) -> None:
         await session.commit()
 
 
-async def logout_all(session: AsyncSession, *, user_id: uuid.UUID) -> None:
-    """Ends every session of the user, and bumps token_version so Identity also rejects the
-    user's current access tokens (other services still accept them until they expire)."""
+async def logout_all(session: AsyncSession, redis: Redis, *, user_id: uuid.UUID, settings: Settings) -> None:
+    """Ends every session of the user (refresh tokens) and revokes their current access tokens
+    everywhere: token_version for Identity, `revoked_before` in Redis for the gateway and services."""
     await tokens_repo.revoke_all_for_user(session, user_id, datetime.now(UTC))
     await users_repo.bump_token_version(session, user_id)
+    await admin.revoke_all_access_tokens(redis, user_id=user_id, ttl_seconds=settings.access_token_ttl_seconds)
     await session.commit()

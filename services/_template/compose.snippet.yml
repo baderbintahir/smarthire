@@ -10,6 +10,7 @@
 #       PORT: "<port>"
 #       DATABASE_URL: postgresql+asyncpg://<name>_user:${<NAME>_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
 #       DB_SCHEMA: <name>
+#       FORWARDED_ALLOW_IPS: 172.30.0.10             # trust X-Forwarded-For only from the gateway
 #     ports:
 #       - "<port>:<port>"
 #     depends_on:

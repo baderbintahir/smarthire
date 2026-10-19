@@ -44,3 +44,9 @@ async def bump_token_version(session: AsyncSession, user_id: uuid.UUID) -> None:
         .where(User.id == user_id)
         .values(token_version=User.token_version + 1, updated_at=func.now())
     )
+
+
+async def set_status(session: AsyncSession, user_id: uuid.UUID, status: str) -> None:
+    await session.execute(
+        update(User).where(User.id == user_id).values(status=status, updated_at=func.now())
+    )

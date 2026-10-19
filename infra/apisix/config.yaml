@@ -1,0 +1,63 @@
+# APISIX node configuration (Phase 4). Routes are NOT here: they live in apisix.yaml.
+# Changes to this file need `docker compose restart gateway`; apisix.yaml is hot-reloaded.
+deployment:
+  role: data_plane
+  role_data_plane:
+    # Standalone mode: read routes from conf/apisix.yaml (in git) instead of etcd.
+    # APISIX re-reads the file when it changes; no Admin API, no etcd.
+    config_provider: yaml
+
+apisix:
+  node_listen: 9080              # inside the container; published as localhost:8000
+  enable_admin: false            # no runtime route changes: config only changes through git
+  # Our own Lua plugins live under infra/apisix/plugins, mounted at
+  # /usr/local/apisix/custom/apisix/plugins/<name>.lua
+  extra_lua_path: "/usr/local/apisix/custom/?.lua"
+  # Status API for the container healthcheck: GET /status/ready (localhost only)
+  status:
+    ip: 127.0.0.1
+    port: 7085
+
+nginx_config:
+  error_log_level: warn
+  # Errors produced by nginx itself (upstream unreachable / unresolvable / too slow) as our JSON
+  # error shape instead of an HTML page. Responses that come FROM a service pass through untouched.
+  http_server_configuration_snippet: |
+    error_page 502 @smarthire_502;
+    error_page 503 @smarthire_503;
+    error_page 504 @smarthire_504;
+    location @smarthire_502 {
+      default_type application/json;
+      return 502 '{"error":{"code":"BAD_GATEWAY","message":"The service is unavailable"}}';
+    }
+    location @smarthire_503 {
+      # e.g. the service's name doesn't resolve (not deployed yet / no healthy node)
+      default_type application/json;
+      return 503 '{"error":{"code":"SERVICE_UNAVAILABLE","message":"The service is unavailable"}}';
+    }
+    location @smarthire_504 {
+      default_type application/json;
+      return 504 '{"error":{"code":"GATEWAY_TIMEOUT","message":"The service took too long to respond"}}';
+    }
+
+# Listing plugins REPLACES the default list: only what we use is loaded (smaller attack surface).
+plugins:
+  - request-id
+  - proxy-rewrite
+  - openid-connect
+  - smarthire-denylist           # ours: revocation check after openid-connect
+  - limit-count
+  - mocking                      # fixed JSON 404 for unknown paths
+  - prometheus                   # metrics, scraped in Phase 13
+  - smarthire-retry-after        # ours: Retry-After on 429
+  # opentelemetry is added in Phase 13 (needs the Jaeger collector to exist)
+
+# TCP/UDP (stream) proxying is unused. Its default plugin list loaded `syslog`, which failed
+# at startup on 3.19.0 ("prometheus-cache not configured"): load none.
+stream_plugins: []
+
+plugin_attr:
+  prometheus:
+    export_addr:
+      ip: 0.0.0.0                # reachable by Prometheus on the Compose network (not published)
+      port: 9091

@@ -123,9 +123,10 @@ async def logout(
 async def logout_all(
     user: CurrentUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
+    redis: Redis = Depends(get_redis),
     settings: Settings = Depends(get_settings),
 ):
-    await sessions.logout_all(session, user_id=user.user_id)
+    await sessions.logout_all(session, redis, user_id=user.user_id, settings=settings)
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     _clear_refresh_cookie(response, settings)
     return response
