@@ -226,6 +226,10 @@ def app_client(static_auth):
     async def create_job(user: CurrentUser = Depends(require_role("RECRUITER"))):
         return {"ok": True}
 
+    @app.get("/board")
+    async def board(user: CurrentUser | None = Depends(auth.get_optional_user)):
+        return {"user": user.role if user else None}
+
     return TestClient(app)
 
 
@@ -244,3 +248,31 @@ def test_ensure_owner():
     ensure_owner(me.user_id, me)  # own resource: fine
     with pytest.raises(ForbiddenError):
         ensure_owner(uuid.uuid4(), me)  # someone else's: 403
+
+
+def test_optional_user(app_client):
+    assert app_client.get("/board").json() == {"user": None}  # anonymous is fine
+    ok = app_client.get("/board", headers={"Authorization": f"Bearer {make_token(role='RECRUITER')}"})
+    assert ok.json() == {"user": "RECRUITER"}
+    # A bad token is NOT treated as anonymous
+    assert app_client.get("/board", headers={"Authorization": "Bearer garbage"}).status_code == 401
+
+
+def test_token_factory_tokens_verify():
+    from smarthire_common.testing import TokenFactory
+
+    tokens = TokenFactory()
+    auth.init_auth(tokens.key_provider, issuer=tokens.issuer, audience=tokens.audience)
+    try:
+        import asyncio
+
+        import fakeredis
+
+        fake = fakeredis.FakeAsyncRedis(decode_responses=True)
+        original = auth.get_redis
+        auth.get_redis = lambda: fake
+        claims = asyncio.run(auth.verify_token(tokens.mint(role="RECRUITER")))
+        assert claims["role"] == "RECRUITER"
+    finally:
+        auth.get_redis = original
+        auth._config = None

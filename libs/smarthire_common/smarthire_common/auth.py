@@ -240,6 +240,17 @@ async def get_current_user(
     return CurrentUser(user_id=user_id, role=claims["role"], jti=claims["jti"], claims=claims)
 
 
+async def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> CurrentUser | None:
+    """For routes that work for anonymous callers AND logged-in ones (e.g. the public job board,
+    where recruiters also see their own drafts). No Authorization header -> None. A header that is
+    present but invalid is still 401: a bad token must never quietly become "anonymous"."""
+    if credentials is None:
+        return None
+    return await get_current_user(credentials)
+
+
 def require_role(*roles: str, user_dependency: Callable = get_current_user):
     """`Depends(require_role("RECRUITER", "ADMIN"))`. user_dependency lets a service add its own
     checks on top of get_current_user (Identity does) and still reuse this."""
