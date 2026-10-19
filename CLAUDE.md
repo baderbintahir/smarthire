@@ -71,6 +71,8 @@ analytics, semantic_index, ai_assistant, bff_web. Gateway: Apache APISIX (config
   (`http://identity:8001`, `postgres:5432`), never `localhost`.
 - Each service: own Postgres schema + own DB user + own Alembic version table.
 - Commit style: conventional commits (`feat(identity): ...`, `infra: ...`, `chore: ...`).
+  NO `Co-Authored-By` trailers or any Claude attribution: the user (GitHub `baderbintahir`,
+  repo-local email badarbintahir@gmail.com) is the sole author.
 
 ## Environment (verified 2026-10-08)
 macOS (darwin, arm64), Docker Compose v5.5.1, Python 3.12.15, uv 0.12.23, git 2.50.1.
