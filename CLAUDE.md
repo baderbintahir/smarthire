@@ -89,7 +89,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 4 Gateway (APISIX, revision 2): [x] 4.1 spike · [x] 4.2 routes/request IDs/XFF · [x] 4.3 JWT + revocation at edge · [x] 4.4 rate limiting · [x] 4.5 SSE · [x] 4.6 metrics hooks
 - [x] Phase 5 Job service: [x] 5.1 scaffold + models · [x] 5.2 state machine · [x] 5.3 CRUD · [x] 5.4 publish stub
 - [x] Phase 6 Candidate service: [x] 6.1 scaffold + models + MinIO · [x] 6.2 profile endpoints · [x] 6.3 resume upload (60 tests + 12 gateway tests pass; live: files in bucket, rows in DB, 415/413 at service, 413 at gateway, anonymous GET 403)
-- [ ] Phase 7 Kafka + outbox
+- [ ] Phase 7 Kafka + outbox: [x] 7.1 kafka + schema registry + kafka ui · [ ] 7.2 envelope + schemas · [ ] 7.3 outbox writer · [ ] 7.4 relay · [ ] 7.5 idempotent consumer · [ ] 7.6 UserRegistered -> profile · [ ] 7.7 job events
 - [ ] Phase 8 Application service
 - [ ] Phase 9 Temporal + job publishing saga
 - [ ] Phase 10 Resume parsing, scoring, application workflow
@@ -102,7 +102,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit Phase 6 if not done, then Phase 7 (Kafka + outbox), step by step again.
+**Next step:** Step 7.2 (event envelope + JSON Schemas + registration script).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -334,3 +334,15 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - Gateway: `client-control` plugin added (config.yaml plugin list); candidates route has
   `max_body_size: 6291456` (6 MB) -> JSON 413 PAYLOAD_TOO_LARGE (error_page in config.yaml). Gateway test
   for "service not deployed -> 503" now uses /api/applications.
+- Step 7.1 Kafka: `apache/kafka:4.3.1` (official image, KRaft combined broker+controller, node id 1, fixed
+  CLUSTER_ID in compose; data in volume `kafkadata`). Listeners: containers use `kafka:19092` (INTERNAL),
+  the host uses `localhost:9092` (EXTERNAL); CONTROLLER :9093 internal only. `auto.create.topics.enable=false`:
+  topics come from `infra/kafka/create-topics.sh` (one-shot `kafka-init`, idempotent, lists once then creates
+  missing): the 8 Appendix A topics + a `.dlq` twin each, 3 partitions, RF 1. Producing to an unknown topic
+  times out (verified). Adding a topic = edit that script. Heap 512 MB.
+- Schema Registry: `confluentinc/cp-schema-registry:8.0.8` at localhost:8081 (`schema-registry:8081` inside),
+  stores schemas in topic `_schemas`, global compatibility BACKWARD (set explicitly). Kafka UI:
+  `kafbat/kafka-ui:v1.5.0` (maintained fork of the abandoned provectuslabs image) at http://localhost:8085,
+  cluster `smarthire-local`. Kafka, Schema Registry and Kafka UI are published on 127.0.0.1 only (no auth).
+- Host-side Kafka experiments: `uv run --no-project --with confluent-kafka python <script>` (bootstrap
+  localhost:9092).
