@@ -61,6 +61,21 @@ def test_register_recruiter_creates_profile(client):
     assert r.json()["recruiter_profile"] == {"display_name": "Rita", "company": "[Company A]"}
 
 
+def test_registration_writes_user_registered_to_the_outbox(client, settings):
+    user_id = register(client).json()["id"]
+    topic, key, event = fetch_one(settings.database_url, "SELECT topic, message_key, payload FROM outbox")
+    assert (topic, key) == ("identity.users", user_id)  # keyed by user: one user's events stay in order
+    assert event["event_type"] == "UserRegistered" and event["producer"] == "identity"
+    assert event["payload"] == {"user_id": user_id, "role": "CANDIDATE"}  # ids only, no email
+
+
+def test_failed_registration_writes_no_event(client, settings):
+    register(client, "ana@example.com")
+    assert register(client, "ANA@example.com").status_code == 409
+    count = fetch_one(settings.database_url, "SELECT count(*) FROM outbox")[0]
+    assert count == 1  # the duplicate's event rolled back with it
+
+
 def test_register_validation(client):
     assert register(client, role="RECRUITER").status_code == 422  # recruiter needs display_name
     assert register(client, role="ADMIN").status_code == 422  # admins can't self-register

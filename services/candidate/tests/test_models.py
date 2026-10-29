@@ -59,6 +59,7 @@ async def test_schema_names_match_appendix_e6_exactly(migrated, database_url):
         "pk_resumes", "fk_resumes_candidate_id_candidates", "uq_resumes_object_key",
         "ck_resumes_content_type", "ck_resumes_size_bytes", "ck_resumes_status",
         "uq_resumes_one_active", "ix_resumes_candidate_uploaded",
+        "pk_outbox", "uq_outbox_event_id", "ix_outbox_unpublished", "pk_processed_events",
     }
 
 

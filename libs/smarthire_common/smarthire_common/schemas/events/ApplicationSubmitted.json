@@ -1,0 +1,37 @@
+{
+  "description": "A candidate applied to a job (Phase 8). Starts the application workflow.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "application_id",
+    "job_id",
+    "candidate_id",
+    "recruiter_id"
+  ],
+  "properties": {
+    "application_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "candidate_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "recruiter_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "examples": [
+    {
+      "application_id": "01a1b2c3-0000-7000-8000-000000000004",
+      "job_id": "01a1b2c3-0000-7000-8000-000000000001",
+      "candidate_id": "01a1b2c3-0000-7000-8000-000000000003",
+      "recruiter_id": "01a1b2c3-0000-7000-8000-000000000002"
+    }
+  ]
+}

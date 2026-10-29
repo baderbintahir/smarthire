@@ -26,6 +26,12 @@ async def upsert(session: AsyncSession, candidate_id: uuid.UUID, **values) -> No
     )
 
 
+async def create_empty(session: AsyncSession, candidate_id: uuid.UUID) -> None:
+    """An empty profile, unless one exists. DO NOTHING (not an update): if the candidate already
+    saved their profile (PUT raced ahead of the event), it is kept as it is."""
+    await session.execute(insert(Candidate).values(id=candidate_id).on_conflict_do_nothing(index_elements=[Candidate.id]))
+
+
 async def active_resume(session: AsyncSession, candidate_id: uuid.UUID) -> Resume | None:
     # Served by the partial unique index uq_resumes_one_active (it holds active rows only)
     stmt = select(Resume).where(Resume.candidate_id == candidate_id, Resume.is_active)

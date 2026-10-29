@@ -1,0 +1,92 @@
+{
+  "description": "A job's content or status changed (full snapshot, so consumers can upsert their replica).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "job_id",
+    "recruiter_id",
+    "title",
+    "status",
+    "stages",
+    "eligibility_rules",
+    "application_limit",
+    "deadline",
+    "version"
+  ],
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "recruiter_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 200
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "DRAFT",
+        "PROCESSING",
+        "READY",
+        "FAILED",
+        "CLOSED"
+      ]
+    },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "minItems": 1,
+      "description": "hiring stages in order"
+    },
+    "eligibility_rules": {
+      "type": "object",
+      "description": "open on purpose: rules are added over time (Job validates them)"
+    },
+    "application_limit": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "deadline": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "the job's version; consumers ignore events older than what they have"
+    }
+  },
+  "examples": [
+    {
+      "job_id": "01a1b2c3-0000-7000-8000-000000000001",
+      "recruiter_id": "01a1b2c3-0000-7000-8000-000000000002",
+      "title": "Backend Engineer",
+      "status": "PROCESSING",
+      "stages": [
+        "Screening",
+        "Interview",
+        "Offer"
+      ],
+      "eligibility_rules": {
+        "min_experience_years": 2
+      },
+      "application_limit": 100,
+      "deadline": null,
+      "version": 2
+    }
+  ]
+}

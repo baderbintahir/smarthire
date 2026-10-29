@@ -61,13 +61,14 @@ def settings(migrated, database_url, redis_url, private_key_path) -> Settings:
         jwt_private_key_path=private_key_path,
         login_max_failures_per_email=3,  # small limits keep the rate-limit tests short
         login_max_failures_per_ip=6,
+        kafka_enabled=False,  # no Kafka in unit tests: events stay in the outbox (tests read it there)
         _env_file=None,
     )
 
 
 @pytest.fixture
 def client(settings):
-    run(testing.truncate(settings.database_url, ["users", "recruiter_profiles", "refresh_tokens"]))
+    run(testing.truncate(settings.database_url, ["users", "recruiter_profiles", "refresh_tokens", "outbox"]))
     run(testing.flush_redis(settings.redis_url))
     # https: the refresh cookie is Secure, so the client only sends it back over https
     with TestClient(create_app(settings), base_url="https://testserver") as c:

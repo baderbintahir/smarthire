@@ -22,4 +22,5 @@ async def test_schema_names_match_appendix_e4_exactly(migrated, database_url):
         "pk_recruiter_profiles", "fk_recruiter_profiles_user_id_users",
         "pk_refresh_tokens", "fk_refresh_tokens_user_id_users", "uq_refresh_tokens_token_hash",
         "ix_refresh_tokens_user_id", "ix_refresh_tokens_family_id",
+        "pk_outbox", "uq_outbox_event_id", "ix_outbox_unpublished",
     }

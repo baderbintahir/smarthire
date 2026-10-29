@@ -147,6 +147,20 @@ def test_upload_stores_the_file_and_the_row(client, with_profile, bucket_objects
     assert client.get("/candidates/me", headers=headers).json()["active_resume"]["id"] == body["id"]
 
 
+def test_upload_writes_resume_uploaded_to_the_outbox(client, with_profile, database_url):
+    user_id, headers = with_profile
+    resume = upload(client, headers).json()
+    [row] = db_rows(database_url, "SELECT topic, message_key, payload FROM outbox")
+    assert (row["topic"], row["message_key"]) == ("candidates.profile", str(user_id))
+    assert row["payload"]["event_type"] == "ResumeUploaded"
+    assert row["payload"]["payload"] == {"candidate_id": str(user_id), "resume_id": resume["id"], "content_type": PDF}
+
+
+def test_rejected_upload_writes_no_event(client, with_profile, database_url):
+    assert upload(client, with_profile[1], data=b"MZ not a pdf").status_code == 415
+    assert db_rows(database_url, "SELECT count(*) AS n FROM outbox")[0]["n"] == 0
+
+
 def test_docx_is_accepted(client, with_profile):
     r = upload(client, with_profile[1], data=MINIMAL_DOCX, name="cv.docx", content_type=DOCX)
     assert r.status_code == 202 and r.json()["content_type"] == DOCX

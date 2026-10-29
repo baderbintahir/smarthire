@@ -1,0 +1,29 @@
+{
+  "description": "A user account was created (Identity). Candidate creates an empty profile for CANDIDATEs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user_id",
+    "role"
+  ],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "CANDIDATE",
+        "RECRUITER",
+        "ADMIN"
+      ]
+    }
+  },
+  "examples": [
+    {
+      "user_id": "01a1b2c3-0000-7000-8000-000000000001",
+      "role": "CANDIDATE"
+    }
+  ]
+}

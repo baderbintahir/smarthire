@@ -1,0 +1,40 @@
+{
+  "description": "Final decision on an application (Phase 8).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "application_id",
+    "job_id",
+    "candidate_id",
+    "decision"
+  ],
+  "properties": {
+    "application_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "candidate_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "HIRED",
+        "REJECTED"
+      ]
+    }
+  },
+  "examples": [
+    {
+      "application_id": "01a1b2c3-0000-7000-8000-000000000004",
+      "job_id": "01a1b2c3-0000-7000-8000-000000000001",
+      "candidate_id": "01a1b2c3-0000-7000-8000-000000000003",
+      "decision": "HIRED"
+    }
+  ]
+}

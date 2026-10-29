@@ -6,6 +6,8 @@ import uuid
 
 from smarthire_common.auth import CurrentUser
 from smarthire_common.errors import ForbiddenError
+from smarthire_common.events import new_event
+from smarthire_common.outbox import add_outbox_event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain import job as rules
@@ -32,6 +34,29 @@ def _content(data: JobIn) -> dict:
 
 async def _with_stages(session: AsyncSession, job: Job) -> tuple[Job, list[JobStage]]:
     return job, (await jobs_repo.stages_for(session, [job.id]))[job.id]
+
+
+async def _publish(session: AsyncSession, event_type: str, job: Job, payload: dict) -> None:
+    """Queue an event about this job in the current transaction. Key = job id: all of one job's
+    events land in the same partition, so consumers see them in order."""
+    event = new_event(event_type, producer="job", payload=payload)
+    await add_outbox_event(session, event, key=str(job.id))
+
+
+def _snapshot(job: Job, stages: list[JobStage]) -> dict:
+    """The full job as other services need it (Application's job_replica, Phase 8). A full
+    snapshot, not just "what changed": a consumer can upsert it without knowing earlier events."""
+    return {
+        "job_id": str(job.id),
+        "recruiter_id": str(job.recruiter_id),
+        "title": job.title,
+        "status": job.status,
+        "stages": [stage.name for stage in stages],  # in order: position = index
+        "eligibility_rules": job.eligibility_rules,
+        "application_limit": job.application_limit,
+        "deadline": job.deadline.isoformat() if job.deadline else None,
+        "version": job.version,
+    }
 
 
 async def _load_owned(session: AsyncSession, job_id: uuid.UUID, user: CurrentUser) -> Job:
@@ -97,10 +122,13 @@ async def update_job(
     if not await jobs_repo.update_if_version(session, job_id, data.version, status=new_status, **_content(data)):
         raise JobVersionConflictError()
     await jobs_repo.replace_stages(session, job_id, stages)
-    # TODO(Phase 7.7): JobUpdated outbox row; TODO(Phase 9.5): re-run publishing when READY -> PROCESSING
+    await session.refresh(job)  # the updated row (new version, status), still inside our transaction
+    job, saved_stages = await _with_stages(session, job)
+    # Same transaction as the update: the event exists if and only if the change does
+    await _publish(session, "JobUpdated", job, _snapshot(job, saved_stages))
+    # TODO(Phase 9.5): re-run publishing when READY -> PROCESSING
     await session.commit()
-    await session.refresh(job)
-    return await _with_stages(session, job)
+    return job, saved_stages
 
 
 async def publish_job(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID) -> Job:
@@ -121,7 +149,9 @@ async def close_job(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID)
     target = rules.close(job.status)
     if not await jobs_repo.set_status_if(session, job_id, expected=job.status, new=target):
         raise JobTransitionError(job.status, target)
-    # TODO(Phase 7.7): JobClosed outbox row (Application closes open applications)
-    await session.commit()
     await session.refresh(job)
+    # Application closes the job's open applications when it sees this (Phase 8)
+    await _publish(session, "JobClosed", job,
+                   {"job_id": str(job.id), "recruiter_id": str(job.recruiter_id), "version": job.version})
+    await session.commit()
     return await _with_stages(session, job)

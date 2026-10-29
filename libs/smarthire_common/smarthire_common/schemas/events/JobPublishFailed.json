@@ -1,0 +1,37 @@
+{
+  "description": "Publishing failed after retries and compensation; the job is FAILED (Phase 9).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "job_id",
+    "recruiter_id",
+    "version",
+    "reason"
+  ],
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "recruiter_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "examples": [
+    {
+      "job_id": "01a1b2c3-0000-7000-8000-000000000001",
+      "recruiter_id": "01a1b2c3-0000-7000-8000-000000000002",
+      "version": 3,
+      "reason": "enrichment timed out"
+    }
+  ]
+}

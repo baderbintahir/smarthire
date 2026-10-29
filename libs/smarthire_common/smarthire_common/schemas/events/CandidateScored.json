@@ -1,0 +1,47 @@
+{
+  "description": "Scoring rated how well a candidate fits a job (Phase 10).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "application_id",
+    "job_id",
+    "candidate_id",
+    "score",
+    "breakdown"
+  ],
+  "properties": {
+    "application_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "candidate_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "breakdown": {
+      "type": "object",
+      "description": "per-criterion points; open, criteria evolve"
+    }
+  },
+  "examples": [
+    {
+      "application_id": "01a1b2c3-0000-7000-8000-000000000004",
+      "job_id": "01a1b2c3-0000-7000-8000-000000000001",
+      "candidate_id": "01a1b2c3-0000-7000-8000-000000000003",
+      "score": 82.5,
+      "breakdown": {
+        "skills": 50,
+        "experience": 32.5
+      }
+    }
+  ]
+}

@@ -9,7 +9,7 @@ from smarthire_common import testing
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 SERVICE_DIR = Path(__file__).resolve().parents[1]
-TABLES = ["candidates", "resumes"]
+TABLES = ["candidates", "resumes", "outbox", "processed_events"]
 BUCKET = "resumes"
 # Same image as docker-compose.yml. Testcontainers' default (minio/minio) is no longer published.
 MINIO_IMAGE = "pgsty/minio:RELEASE.2026-08-04T00-00-00Z"
@@ -88,6 +88,7 @@ def settings(migrated, database_url, redis_url, minio):
         s3_endpoint=minio[0],
         s3_access_key=S3_ACCESS_KEY,
         s3_secret_key=S3_SECRET_KEY,
+        kafka_enabled=False,  # no Kafka in unit tests: events stay in the outbox; handlers are called directly
         _env_file=None,
     )
 

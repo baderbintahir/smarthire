@@ -2,7 +2,9 @@
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from smarthire_common.events import new_event
 from smarthire_common.models import new_id
+from smarthire_common.outbox import add_outbox_event
 
 from app.domain.errors import EmailAlreadyRegisteredError
 from app.domain.passwords import hash_password
@@ -33,8 +35,12 @@ async def register_user(
         profile = RecruiterProfile(user_id=user.id, display_name=display_name, company=company)
     try:
         await users_repo.add(session, user, profile)
+        # Tell other services, in the SAME transaction: the event exists if and only if the user
+        # does (Candidate creates a profile from it). IDs only, no email or name (E.1 principle 10)
+        event = new_event("UserRegistered", producer="identity", payload={"user_id": str(user.id), "role": role})
+        await add_outbox_event(session, event, key=str(user.id))
         # Commit HERE, not in get_session: its commit runs after the response is sent, so a
-        # failure there could not become a 409. User + profile commit together or not at all.
+        # failure there could not become a 409. User + profile + event commit together or not at all.
         await session.commit()
     except IntegrityError:
         # The real guard: uq_users_email_lower rejected a concurrent duplicate

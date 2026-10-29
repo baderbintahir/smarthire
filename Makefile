@@ -4,7 +4,7 @@
 .DEFAULT_GOAL := help
 
 # Targets are actions, not files: always run them even if a file/folder of that name exists
-.PHONY: help up down ps logs migrate test test-gateway keys check-s
+.PHONY: help up down ps logs migrate test test-gateway test-events schemas keys check-s
 
 # Where a service's code lives: s=common is the shared library, anything else is services/<s>
 SERVICE_DIR = $(if $(filter common,$(s)),libs/smarthire_common,services/$(s))
@@ -32,6 +32,12 @@ test: check-s ## Run a service's tests on the host:  make test s=identity  (s=co
 
 test-gateway: ## Check the gateway (APISIX) config against the RUNNING stack (make up first)
 	uv run --no-project --with pytest --with httpx --with pyjwt pytest tests/gateway -q
+
+test-events: ## Check events end to end against the RUNNING stack (make up first)
+	uv run --no-project --with pytest --with httpx --with "confluent-kafka[schemaregistry,json]" pytest tests/events -q
+
+schemas: ## Register the event schemas in Schema Registry (also runs on every `make up`)
+	SCHEMA_REGISTRY_URL=http://localhost:8081 PYTHONPATH=libs/smarthire_common python3 infra/schema-registry/register.py
 
 keys: ## Generate the dev RSA key pair Identity signs JWTs with (secrets/identity, gitignored)
 	cd services/identity && uv run python scripts/generate_dev_keys.py

@@ -206,3 +206,53 @@ def test_unknown_job_is_404(client, recruiter):
 
 def test_ready_checks_database_and_redis(client):
     assert client.get("/health/ready").json()["checks"] == {"database": "ok", "redis": "ok"}
+
+
+# ---------- events (Step 7.7): written to the outbox in the same transaction ----------
+
+
+def outbox(database_url: str) -> list[dict]:
+    async def go():
+        engine = create_async_engine(database_url)
+        async with engine.connect() as conn:
+            rows = (await conn.execute(text("SELECT message_key, payload FROM outbox ORDER BY id"))).all()
+        await engine.dispose()
+        return [{"key": key, **envelope} for key, envelope in rows]
+
+    return testing.run(go())
+
+
+def test_edit_writes_job_updated_with_a_full_snapshot(client, recruiter, database_url):
+    job = create(client, recruiter[1])
+    assert outbox(database_url) == []  # creating a draft tells nobody: drafts are private
+    client.put(f"/jobs/{job['id']}", json=job_body(title="Senior Backend Engineer", version=1), headers=recruiter[1])
+    [event] = outbox(database_url)
+    assert event["key"] == job["id"] and event["event_type"] == "JobUpdated" and event["producer"] == "job"
+    assert event["payload"] == {
+        "job_id": job["id"], "recruiter_id": str(recruiter[0]), "title": "Senior Backend Engineer",
+        "status": "DRAFT", "stages": ["Screening", "Interview", "Offer"],
+        "eligibility_rules": {"min_experience_years": 2}, "application_limit": 100, "deadline": None,
+        "version": 2,
+    }
+
+
+def test_rejected_edit_writes_no_event(client, recruiter, database_url):
+    job = create(client, recruiter[1])
+    client.put(f"/jobs/{job['id']}", json=job_body(version=1), headers=recruiter[1])
+    assert client.put(f"/jobs/{job['id']}", json=job_body(version=1), headers=recruiter[1]).status_code == 409
+    assert len(outbox(database_url)) == 1  # the stale save rolled back, its event with it
+
+
+def test_close_writes_job_closed_and_versions_only_grow(client, recruiter, database_url):
+    job = create(client, recruiter[1])
+    client.put(f"/jobs/{job['id']}", json=job_body(version=1), headers=recruiter[1])  # v2
+    client.post(f"/jobs/{job['id']}/publish", headers=recruiter[1])  # v3 (no event yet: Phase 9)
+    force_status(database_url, job["id"], "READY")
+    closed = client.post(f"/jobs/{job['id']}/close", headers=recruiter[1]).json()  # v4
+    events = outbox(database_url)
+    assert [e["event_type"] for e in events] == ["JobUpdated", "JobClosed"]
+    assert events[1]["payload"] == {"job_id": job["id"], "recruiter_id": str(recruiter[0]), "version": 4}
+    assert closed["version"] == 4
+    # Every change has a higher version, so a consumer can drop anything older than what it has
+    versions = [e["payload"]["version"] for e in events]
+    assert versions == sorted(versions) and len(set(versions)) == len(versions)

@@ -96,9 +96,14 @@ async def update_if_version(session: AsyncSession, job_id: uuid.UUID, expected_v
 
 async def set_status_if(session: AsyncSession, job_id: uuid.UUID, *, expected: str, new: str) -> bool:
     """Moves the status only if it is still what the caller checked: a concurrent publish/close
-    can't both succeed. False = the status changed meanwhile."""
+    can't both succeed. False = the status changed meanwhile.
+
+    Bumps the version too: EVERY change gets a new version, so each event about this job carries a
+    higher number than the last, and consumers can ignore stale events ("only apply if newer")."""
     result = await session.execute(
-        update(Job).where(Job.id == job_id, Job.status == expected).values(status=new, updated_at=func.now())
+        update(Job)
+        .where(Job.id == job_id, Job.status == expected)
+        .values(status=new, version=Job.version + 1, updated_at=func.now())
     )
     return result.rowcount == 1
 

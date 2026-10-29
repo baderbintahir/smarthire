@@ -89,7 +89,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 4 Gateway (APISIX, revision 2): [x] 4.1 spike · [x] 4.2 routes/request IDs/XFF · [x] 4.3 JWT + revocation at edge · [x] 4.4 rate limiting · [x] 4.5 SSE · [x] 4.6 metrics hooks
 - [x] Phase 5 Job service: [x] 5.1 scaffold + models · [x] 5.2 state machine · [x] 5.3 CRUD · [x] 5.4 publish stub
 - [x] Phase 6 Candidate service: [x] 6.1 scaffold + models + MinIO · [x] 6.2 profile endpoints · [x] 6.3 resume upload (60 tests + 12 gateway tests pass; live: files in bucket, rows in DB, 415/413 at service, 413 at gateway, anonymous GET 403)
-- [ ] Phase 7 Kafka + outbox: [x] 7.1 kafka + schema registry + kafka ui · [ ] 7.2 envelope + schemas · [ ] 7.3 outbox writer · [ ] 7.4 relay · [ ] 7.5 idempotent consumer · [ ] 7.6 UserRegistered -> profile · [ ] 7.7 job events
+- [x] Phase 7 Kafka + outbox: [x] 7.1 kafka/registry/ui · [x] 7.2 envelope + schemas · [x] 7.3 outbox writer · [x] 7.4 relay · [x] 7.5 idempotent consumer · [x] 7.6 UserRegistered -> profile · [x] 7.7 job events (chassis 83, identity 37, job 79, candidate 67, gateway 12, events e2e 6; break-it verified)
 - [ ] Phase 8 Application service
 - [ ] Phase 9 Temporal + job publishing saga
 - [ ] Phase 10 Resume parsing, scoring, application workflow
@@ -102,7 +102,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** Step 7.2 (event envelope + JSON Schemas + registration script).
+**Next step:** commit Phase 7 if not done, then Phase 8 (Application service), step by step again.
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -346,3 +346,49 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   cluster `smarthire-local`. Kafka, Schema Registry and Kafka UI are published on 127.0.0.1 only (no auth).
 - Host-side Kafka experiments: `uv run --no-project --with confluent-kafka python <script>` (bootstrap
   localhost:9092).
+- Phase 7 (7.2-7.7) was built in one pass at the user's request (one-off, like Phases 2, 4, 5, 6).
+- EVENTS CHASSIS (libs/smarthire_common):
+  - `event_catalog.py` (STDLIB ONLY, imported by schema-init): `EVENT_TOPICS` (event type -> topic,
+    Appendix A), `subject_for` (`<topic>-<EventType>`, TopicRecordNameStrategy, because topics carry several
+    types), `envelope_schema`/`schema_str` (payload schema wrapped in the envelope; `title` = event type =
+    record name). DEVIATION from the plan: schemas live in the chassis package
+    (`smarthire_common/schemas/events/<EventType>.json`, payload only, draft-07, closed
+    `additionalProperties: false`, with `examples`), not repo-root `schemas/`, so every service image ships them.
+  - `events.py`: `EventEnvelope` (event_id UUIDv7, event_type, schema_version, occurred_at, producer,
+    trace_context, payload) and `new_event(type, producer=, payload=)` (unknown types fail at the producer).
+  - `outbox.py`: `OutboxMixin` (services declare `class OutboxEvent(OutboxMixin, Base)` in app/models/messaging.py
+    so THEIR migrations own the table), `add_outbox_event(session, event, key=)` (caller's transaction; payload
+    column = the whole envelope), `OutboxRelay` (200 ms poll, batch 100, FOR UPDATE SKIP LOCKED, marks only
+    Kafka-confirmed rows; at-least-once), `KafkaSender` (JSONSerializer, `auto.register.schemas=False`,
+    idempotent producer, message.timeout 10 s, flush 15 s), `start_outbox_relay(settings)`.
+  - `kafka.py`: `ProcessedEventMixin`, `EventConsumer` (group id = consumer name; manual offsets committed AFTER
+    the DB commit; `process()` = INSERT processed_events ON CONFLICT DO NOTHING + handler in one transaction;
+    handler errors retried 3x with backoff then `<topic>.dlq` with x-error/x-consumer/x-original-* headers;
+    undecodable/invalid messages -> DLQ at once; other errors (registry/DB/DLQ down) -> seek back, retry in 5 s),
+    `start_consumer(settings, name=, topics=, handlers=)`. `background.stop_tasks(*tasks)` for shutdown.
+  - Chassis code writes outbox/processed_events through LIGHTWEIGHT `table()` constructs, never models in the
+    shared Base metadata (else every service's `alembic check` would expect those tables).
+  - Settings (BaseServiceSettings): `kafka_bootstrap_servers` (kafka:19092), `schema_registry_url`
+    (http://schema-registry:8081), `kafka_enabled` (True; ALL service tests set False and read events from the
+    outbox table). Kafka is deliberately NOT a readiness check (the outbox lets the API work without it).
+  - Relay/consumers run as asyncio tasks in the service's lifespan (not separate worker containers).
+- schema-init: one-shot `python:3.12-slim` container running `infra/schema-registry/register.py` (stdlib, mounts
+  the chassis at /chassis) on every `up`; fails on HTTP 409 (incompatible). Host: `make schemas`. Verified on the
+  real registry: optional field added = allowed; required field added / field removed / type changed = rejected.
+  To change a schema incompatibly in DEV only: delete the subject (and `?permanent=true`) and re-register.
+- Event producers so far: Identity `UserRegistered` (register transaction, key user_id, payload user_id + role);
+  Job `JobUpdated` (full snapshot on PUT) and `JobClosed` (key job_id); Candidate `ResumeUploaded` (key
+  candidate_id). Creating/publishing a job emits nothing yet (JobPublishRequested/JobReady are Phase 9).
+  Job: `set_status_if` now bumps `version` too, so every change (edit, publish, close) has a higher version and
+  consumers can drop stale events (Phase 8 source_version guard).
+- Consumer so far: Candidate group `candidate` on identity.users (`app/events/handlers.py`): CANDIDATE ->
+  `repo.create_empty` (ON CONFLICT DO NOTHING keeps a profile already saved via PUT). PUT /candidates/me
+  still works as a fallback if the event is late.
+- Migrations: identity 0004_outbox, job 0002_outbox, candidate 0002_outbox_and_processed_events (names pk_outbox,
+  uq_outbox_event_id, ix_outbox_unpublished, pk_processed_events; exact-name tests updated).
+- `make test-events` (needs `make up`): tests/events/test_events.py, 6 tests (profile from event, wire format,
+  recruiter ignored, replay skipped via log "skipped duplicate", poison -> DLQ, job events in order).
+  Uses `docker compose exec postgres psql` for DB checks. Each run leaves test users/jobs in the dev DB.
+- Known limits (documented, accepted for now): a row that can't be serialized stays unpublished and is retried
+  forever (logged); with SEVERAL relay replicas, SKIP LOCKED can reorder one key's events across batches
+  (consumers must use version guards); outbox/processed_events cleanup jobs (E.14) not built yet.

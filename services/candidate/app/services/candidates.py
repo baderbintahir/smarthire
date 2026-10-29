@@ -6,7 +6,9 @@ import uuid
 
 from smarthire_common.auth import CurrentUser
 from smarthire_common.errors import ForbiddenError
+from smarthire_common.events import new_event
 from smarthire_common.models import new_id
+from smarthire_common.outbox import add_outbox_event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain import resumes as resume_rules
@@ -19,7 +21,8 @@ from app.schemas.candidate import ProfileIn
 
 log = logging.getLogger(__name__)
 
-# Until Phase 7 creates profiles from the UserRegistered event, a candidate makes their own with PUT
+# Profiles are created from the UserRegistered event (app/events/handlers.py), a moment after
+# registration. Until it arrives (or if Kafka is down), a candidate can create theirs with PUT
 NO_PROFILE = "Create your profile first (PUT /candidates/me)"
 
 
@@ -90,7 +93,13 @@ async def upload_resume(
             size_bytes=len(data),
         )
         await repo.add_active_resume(session, resume)
-        # TODO(Phase 7.7): ResumeUploaded outbox row; TODO(Phase 10.2): enqueue parse_resume(resume_id)
+        event = new_event(
+            "ResumeUploaded",
+            producer="candidate",
+            payload={"candidate_id": str(user.user_id), "resume_id": str(resume_id), "content_type": content_type},
+        )
+        await add_outbox_event(session, event, key=str(user.user_id))  # same transaction as the row
+        # TODO(Phase 10.2): enqueue parse_resume(resume_id)
         await session.commit()
     except BaseException:
         await session.rollback()

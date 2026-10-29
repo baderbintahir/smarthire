@@ -1,0 +1,46 @@
+{
+  "description": "A resume was parsed into structured data (Phase 10).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "candidate_id",
+    "resume_id",
+    "skills",
+    "experience_years"
+  ],
+  "properties": {
+    "candidate_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "resume_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "experience_years": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "minimum": 0
+    }
+  },
+  "examples": [
+    {
+      "candidate_id": "01a1b2c3-0000-7000-8000-000000000001",
+      "resume_id": "01a1b2c3-0000-7000-8000-000000000003",
+      "skills": [
+        "python",
+        "sql"
+      ],
+      "experience_years": 3.5
+    }
+  ]
+}

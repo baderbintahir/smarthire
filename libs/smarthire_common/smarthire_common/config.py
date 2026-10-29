@@ -17,3 +17,9 @@ class BaseServiceSettings(BaseSettings):
     jwks_url: str = "http://identity:8001/.well-known/jwks.json"
     jwt_issuer: str = "smarthire-identity"
     jwt_audience: str = "smarthire"
+
+    # --- Events (Phase 7); only used by services that publish or consume ---
+    kafka_bootstrap_servers: str = "kafka:19092"  # inside Compose; localhost:9092 from the host
+    schema_registry_url: str = "http://schema-registry:8081"
+    # Start the outbox relay / consumers with the app. Tests turn this off (no Kafka there)
+    kafka_enabled: bool = True
