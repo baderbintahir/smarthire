@@ -27,7 +27,7 @@ def migrated(database_url):
 @pytest.fixture
 async def session(migrated, database_url):
     """A session connected as job_user, on freshly emptied tables."""
-    await testing.truncate(database_url, ["jobs", "job_stages", "outbox"])
+    await testing.truncate(database_url, ["jobs", "job_stages", "outbox", "processed_events"])
     engine = create_async_engine(database_url)
     async with AsyncSession(engine, expire_on_commit=False) as s:
         yield s
@@ -55,9 +55,10 @@ def client(migrated, database_url, redis_url, tokens):
     from app.config import Settings
     from app.main import create_app
 
-    testing.run(testing.truncate(database_url, ["jobs", "job_stages", "outbox"]))
+    testing.run(testing.truncate(database_url, ["jobs", "job_stages", "outbox", "processed_events"]))
     testing.run(testing.flush_redis(redis_url))
     # kafka_enabled=False: no Kafka in unit tests; events stay in the outbox, where tests read them
-    settings = Settings(database_url=database_url, redis_url=redis_url, kafka_enabled=False, _env_file=None)
+    settings = Settings(database_url=database_url, redis_url=redis_url, kafka_enabled=False,
+                        temporal_enabled=False, _env_file=None)
     with TestClient(create_app(settings, key_provider=tokens.key_provider)) as c:
         yield c

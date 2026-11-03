@@ -246,13 +246,32 @@ def test_rejected_edit_writes_no_event(client, recruiter, database_url):
 def test_close_writes_job_closed_and_versions_only_grow(client, recruiter, database_url):
     job = create(client, recruiter[1])
     client.put(f"/jobs/{job['id']}", json=job_body(version=1), headers=recruiter[1])  # v2
-    client.post(f"/jobs/{job['id']}/publish", headers=recruiter[1])  # v3 (no event yet: Phase 9)
+    client.post(f"/jobs/{job['id']}/publish", headers=recruiter[1])  # v3 + JobPublishRequested
     force_status(database_url, job["id"], "READY")
     closed = client.post(f"/jobs/{job['id']}/close", headers=recruiter[1]).json()  # v4
     events = outbox(database_url)
-    assert [e["event_type"] for e in events] == ["JobUpdated", "JobClosed"]
-    assert events[1]["payload"] == {"job_id": job["id"], "recruiter_id": str(recruiter[0]), "version": 4}
+    assert [e["event_type"] for e in events] == ["JobUpdated", "JobPublishRequested", "JobClosed"]
+    assert events[2]["payload"] == {"job_id": job["id"], "recruiter_id": str(recruiter[0]), "version": 4}
     assert closed["version"] == 4
     # Every change has a higher version, so a consumer can drop anything older than what it has
     versions = [e["payload"]["version"] for e in events]
     assert versions == sorted(versions) and len(set(versions)) == len(versions)
+
+
+# ---------- Step 9.5: publishing is requested through the outbox ----------
+
+
+def test_publish_requests_the_workflow_in_the_same_transaction(client, recruiter, database_url):
+    job = create(client, recruiter[1])
+    published = client.post(f"/jobs/{job['id']}/publish", headers=recruiter[1]).json()
+    [event] = outbox(database_url)
+    assert event["key"] == job["id"] and event["event_type"] == "JobPublishRequested"
+    assert event["payload"] == {"job_id": job["id"], "version": 2}  # the version the workflow will process
+    assert published["status"] == "PROCESSING"
+
+
+def test_editing_a_ready_job_requests_publishing_again(client, recruiter, database_url):
+    job = create(client, recruiter[1])
+    force_status(database_url, job["id"], "READY")
+    client.put(f"/jobs/{job['id']}", json=job_body(title="Changed title", version=1), headers=recruiter[1])
+    assert [e["event_type"] for e in outbox(database_url)] == ["JobUpdated", "JobPublishRequested"]

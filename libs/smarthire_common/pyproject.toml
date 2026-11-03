@@ -16,6 +16,11 @@ dependencies = [
     "confluent-kafka[json,schemaregistry]>=2.6",
 ]
 
+[project.optional-dependencies]
+# Only services that need them install these: `smarthire-common[temporal]`, `smarthire-common[mongo]`
+temporal = ["temporalio>=1.9"]
+mongo = ["pymongo>=4.10"]  # PyMongo's own async API (Motor, its predecessor, is deprecated)
+
 [dependency-groups]
 dev = [
     "pytest>=8",

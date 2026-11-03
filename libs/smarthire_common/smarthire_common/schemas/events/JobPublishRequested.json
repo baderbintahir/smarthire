@@ -1,0 +1,25 @@
+{
+  "description": "Job asks for its publishing workflow to start (written with the PROCESSING status change). Job's own consumer starts JobPublishingWorkflow with id publish-{job_id}-{version}.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "job_id",
+    "version"
+  ],
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "examples": [
+    {
+      "job_id": "01a1b2c3-0000-7000-8000-000000000001",
+      "version": 3
+    }
+  ]
+}

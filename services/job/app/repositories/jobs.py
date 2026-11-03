@@ -108,6 +108,19 @@ async def set_status_if(session: AsyncSession, job_id: uuid.UUID, *, expected: s
     return result.rowcount == 1
 
 
+async def finish_publishing(session: AsyncSession, job_id: uuid.UUID, version: int, status: str) -> bool:
+    """End of the publishing workflow: PROCESSING -> READY/FAILED, but ONLY for the version that
+    workflow was started for (an edit since then made it stale). READY also records published_at the
+    first time. False = not applicable (stale, or already done)."""
+    values = {"status": status, "version": Job.version + 1, "updated_at": func.now()}
+    if status == "READY":
+        values["published_at"] = func.coalesce(Job.published_at, func.now())
+    result = await session.execute(
+        update(Job).where(Job.id == job_id, Job.status == "PROCESSING", Job.version == version).values(**values)
+    )
+    return result.rowcount == 1
+
+
 async def replace_stages(session: AsyncSession, job_id: uuid.UUID, names: list[str]) -> None:
     # Delete + insert in the same transaction: the unique (job_id, position/name) constraints
     # never see old and new stages at the same time

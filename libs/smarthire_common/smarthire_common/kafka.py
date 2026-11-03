@@ -97,6 +97,13 @@ _processed = table("processed_events", column("consumer_name", Text), column("ev
 
 # ---------------------------------------------------------------- consumer runner
 
+
+class RetryLater(Exception):
+    """Raise from a handler when a DEPENDENCY is down (e.g. Temporal): the event is fine, the time is
+    wrong. It skips the retries-then-DLQ path: the consumer goes back to the message and tries again
+    in a few seconds, for as long as it takes."""
+
+
 Handler = Callable[[AsyncSession, EventEnvelope], Awaitable[None]]
 
 
@@ -187,6 +194,8 @@ class EventConsumer:
             try:
                 await self.process(envelope, handler)
                 return
+            except RetryLater:
+                raise  # not the event's fault: run() seeks back and retries later, never DLQ
             except Exception as exc:
                 if attempt == self.max_attempts:
                     log.exception("consumer %s: %s %s failed %d times", self.name, envelope.event_type, envelope.event_id, attempt)

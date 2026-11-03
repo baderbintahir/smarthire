@@ -6,13 +6,18 @@ from smarthire_common.background import stop_tasks
 from smarthire_common.db import close_db, init_db
 from smarthire_common.errors import register_exception_handlers
 from smarthire_common.health import db_ping_check, health_router, register_readiness_check
+from smarthire_common.kafka import start_consumer
 from smarthire_common.logging import setup_logging
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
+from smarthire_common.temporal import start_worker
 
 from app.api import jobs
 from app.config import Settings
+from app.events import handlers
+from app.workflows import activities
+from app.workflows.publishing import JOB_TQ, JobPublishingWorkflow
 
 
 def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | None = None) -> FastAPI:
@@ -33,8 +38,19 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
         register_readiness_check("database", db_ping_check)
         # Without Redis we can't check revocation, and protected routes fail closed: not ready
         register_readiness_check("redis", redis_ping_check)
-        # Publishes job events from the outbox (Kafka down = events wait; not a readiness check)
-        tasks = [start_outbox_relay(settings)] if settings.kafka_enabled else []
+        # Background work (none of it is a readiness check: the API works while Kafka/Temporal are down):
+        # publish job events from the outbox, start publishing workflows from JobPublishRequested,
+        # and run the workflow + Job's own activities (job-tq)
+        tasks = []
+        if settings.kafka_enabled:
+            tasks += [
+                start_outbox_relay(settings),
+                start_consumer(settings, name=handlers.CONSUMER_NAME, topics=handlers.TOPICS,
+                               handlers=handlers.build_handlers(settings)),
+            ]
+        if settings.temporal_enabled:
+            tasks.append(start_worker(settings, task_queue=JOB_TQ, workflows=[JobPublishingWorkflow],
+                                      activities=activities.ACTIVITIES))
         yield
         await stop_tasks(*tasks)
         await close_auth()

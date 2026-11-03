@@ -1239,10 +1239,13 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9" },
+    { name = "pymongo", marker = "extra == 'mongo'", specifier = ">=4.10" },
     { name = "redis", specifier = ">=5.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
+    { name = "temporalio", marker = "extra == 'temporal'", specifier = ">=1.9" },
     { name = "uuid6", specifier = ">=2024.1.12" },
 ]
+provides-extras = ["temporal", "mongo"]
 
 [package.metadata.requires-dev]
 dev = [

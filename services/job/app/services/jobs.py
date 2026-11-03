@@ -36,14 +36,14 @@ async def _with_stages(session: AsyncSession, job: Job) -> tuple[Job, list[JobSt
     return job, (await jobs_repo.stages_for(session, [job.id]))[job.id]
 
 
-async def _publish(session: AsyncSession, event_type: str, job: Job, payload: dict) -> None:
+async def publish_event(session: AsyncSession, event_type: str, job: Job, payload: dict) -> None:
     """Queue an event about this job in the current transaction. Key = job id: all of one job's
     events land in the same partition, so consumers see them in order."""
     event = new_event(event_type, producer="job", payload=payload)
     await add_outbox_event(session, event, key=str(job.id))
 
 
-def _snapshot(job: Job, stages: list[JobStage]) -> dict:
+def snapshot(job: Job, stages: list[JobStage]) -> dict:
     """The full job as other services need it (Application's job_replica, Phase 8). A full
     snapshot, not just "what changed": a consumer can upsert it without knowing earlier events."""
     return {
@@ -57,6 +57,14 @@ def _snapshot(job: Job, stages: list[JobStage]) -> dict:
         "deadline": job.deadline.isoformat() if job.deadline else None,
         "version": job.version,
     }
+
+
+async def request_publishing(session: AsyncSession, job: Job) -> None:
+    """Ask for JobPublishingWorkflow to run for this job version, via the outbox, in the SAME
+    transaction as the change to PROCESSING. Job's own consumer then starts the workflow with id
+    publish-{job_id}-{version} (app/events/handlers.py). Starting it straight from this request
+    would be a dual write: PROCESSING committed but no workflow (or the reverse) after a crash."""
+    await publish_event(session, "JobPublishRequested", job, {"job_id": str(job.id), "version": job.version})
 
 
 async def _load_owned(session: AsyncSession, job_id: uuid.UUID, user: CurrentUser) -> Job:
@@ -125,22 +133,23 @@ async def update_job(
     await session.refresh(job)  # the updated row (new version, status), still inside our transaction
     job, saved_stages = await _with_stages(session, job)
     # Same transaction as the update: the event exists if and only if the change does
-    await _publish(session, "JobUpdated", job, _snapshot(job, saved_stages))
-    # TODO(Phase 9.5): re-run publishing when READY -> PROCESSING
+    await publish_event(session, "JobUpdated", job, snapshot(job, saved_stages))
+    if job.status == JobStatus.PROCESSING:  # a READY job was edited: its content must be processed again
+        await request_publishing(session, job)
     await session.commit()
     return job, saved_stages
 
 
 async def publish_job(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID) -> Job:
-    """Step 5.4 stub: DRAFT/FAILED -> PROCESSING and stop there. Phase 9 adds the workflow that
-    takes it to READY (or FAILED)."""
+    """DRAFT/FAILED -> PROCESSING, and request the publishing workflow (Step 9.5), which takes the
+    job to READY (or FAILED). The caller gets 202 right away: the work happens afterwards."""
     job = await _load_owned(session, job_id, user)
     target = rules.publish(job.status)
     if not await jobs_repo.set_status_if(session, job_id, expected=job.status, new=target):
         raise JobTransitionError(job.status, target)  # someone changed the status meanwhile
-    # TODO(Phase 9.5): JobPublishRequested outbox row, which starts the publishing workflow
+    await session.refresh(job)  # the new version (every status change bumps it)
+    await request_publishing(session, job)
     await session.commit()
-    await session.refresh(job)
     return job
 
 
@@ -151,7 +160,7 @@ async def close_job(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID)
         raise JobTransitionError(job.status, target)
     await session.refresh(job)
     # Application closes the job's open applications when it sees this (Phase 8)
-    await _publish(session, "JobClosed", job,
+    await publish_event(session, "JobClosed", job,
                    {"job_id": str(job.id), "recruiter_id": str(job.recruiter_id), "version": job.version})
     await session.commit()
     return await _with_stages(session, job)

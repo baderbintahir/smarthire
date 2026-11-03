@@ -23,3 +23,8 @@ class BaseServiceSettings(BaseSettings):
     schema_registry_url: str = "http://schema-registry:8081"
     # Start the outbox relay / consumers with the app. Tests turn this off (no Kafka there)
     kafka_enabled: bool = True
+
+    # --- Workflows (Phase 9); only used by services with Temporal workers or clients ---
+    temporal_address: str = "temporal:7233"
+    temporal_namespace: str = "default"
+    temporal_enabled: bool = True  # start the Temporal worker with the app; tests turn it off

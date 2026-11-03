@@ -141,5 +141,5 @@ async def test_schema_names_match_appendix_e5_exactly(migrated, database_url):
         "ck_jobs_status", "ck_job_stages_position_non_negative",
         "uq_job_stages_job_position", "uq_job_stages_job_name",
         "ix_jobs_recruiter_status_created", "ix_jobs_ready_created",
-        "pk_outbox", "uq_outbox_event_id", "ix_outbox_unpublished",
+        "pk_outbox", "uq_outbox_event_id", "ix_outbox_unpublished", "pk_processed_events",
     }

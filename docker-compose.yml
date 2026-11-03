@@ -177,6 +177,59 @@ services:
       timeout: 3s
       retries: 5
 
+  job_enrichment:
+    build:
+      context: .                                   # repo root: the image needs libs/ too
+      dockerfile: services/job_enrichment/Dockerfile
+    environment:
+      SERVICE_NAME: job_enrichment
+      PORT: "8003"
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DATABASE: enrichment
+      TEMPORAL_ADDRESS: temporal:7233              # its worker polls enrichment-tq
+    ports:
+      - "127.0.0.1:8003:8003"                      # internal read API (not routed via the gateway)
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:                                   # slim image has no curl, so use python
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ------------------------------------------------------------ workflows + documents (Phase 9)
+  temporal:
+    # Temporal's dev server (temporal CLI): server + Web UI in one process, state in a SQLite file.
+    # Production runs temporalio/server on Postgres/Cassandra with a separate UI; the old all-in-one
+    # temporalio/auto-setup image is no longer maintained (last tag mid-2026). Pinned.
+    image: temporalio/temporal:1.9.1
+    command: ["server", "start-dev", "--ip", "0.0.0.0", "--ui-ip", "0.0.0.0", "--ui-port", "8233",
+              "--db-filename", "/home/temporal/temporal.db"]
+    ports:
+      - "127.0.0.1:7233:7233"                      # gRPC: workers and clients connect here (no auth)
+      - "127.0.0.1:8088:8233"                      # Web UI: http://localhost:8088
+    volumes:
+      - temporaldata:/home/temporal                # workflow histories survive restarts
+    healthcheck:
+      test: ["CMD", "temporal", "operator", "cluster", "health", "--address", "localhost:7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  mongo:
+    image: mongo:8.0.34
+    ports:
+      - "127.0.0.1:27017:27017"                    # no auth locally (like Redis/Kafka): localhost only
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   # ------------------------------------------------------------ events (Phase 7)
   kafka:
     image: apache/kafka:4.3.1                      # official image; KRaft mode, no ZooKeeper
@@ -298,6 +351,8 @@ volumes:
   redisdata:
   miniodata:
   kafkadata:
+  temporaldata:
+  mongodata:
 
 networks:
   default:

@@ -91,7 +91,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 6 Candidate service: [x] 6.1 scaffold + models + MinIO · [x] 6.2 profile endpoints · [x] 6.3 resume upload (60 tests + 12 gateway tests pass; live: files in bucket, rows in DB, 415/413 at service, 413 at gateway, anonymous GET 403)
 - [x] Phase 7 Kafka + outbox: [x] 7.1 kafka/registry/ui · [x] 7.2 envelope + schemas · [x] 7.3 outbox writer · [x] 7.4 relay · [x] 7.5 idempotent consumer · [x] 7.6 UserRegistered -> profile · [x] 7.7 job events (chassis 83, identity 37, job 79, candidate 67, gateway 12, events e2e 6; break-it verified)
 - [x] Phase 8 Application service: [x] 8.1 models · [x] 8.2 job replica consumer · [x] 8.3 submit (idempotency, quota lock) · [x] 8.4 views · [x] 8.5 stage/notes/decision/withdraw (67 tests; gateway 13, events e2e 7; live race: 20 applies, quota 10 -> exactly 10)
-- [ ] Phase 9 Temporal + job publishing saga
+- [x] Phase 9 Temporal + job publishing saga: [x] 9.1 temporal + mongo · [x] 9.2 hello world · [x] 9.3 job_enrichment · [x] 9.4 JobPublishingWorkflow · [x] 9.5 reliable start (job 89, enrichment 12, chassis 86, events e2e 8; break-it verified)
 - [ ] Phase 10 Resume parsing, scoring, application workflow
 - [ ] Phase 11 Notification
 - [ ] Phase 12 Analytics
@@ -102,7 +102,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit Phase 8 if not done, then Phase 9 (Temporal + job publishing saga), step by step unless the user asks for one pass.
+**Next step:** commit Phase 9 if not done, then Phase 10 (resume parsing, scoring, application workflow).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -427,3 +427,45 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - Events e2e (`make test-events`, 7 tests) simulates JobReady by producing it with the registered schema
   (`produce_event` helper, imports the stdlib-only event_catalog via sys.path). Dev DB note: a live race check left
   10 test applications whose stage-history rows were deleted by a cleanup slip (test data only).
+- Phase 9 was built in one pass at the user's request (one-off, like Phases 2, 4-8).
+- Temporal: `temporalio/temporal:1.9.1` DEV SERVER (`server start-dev`, SQLite at /home/temporal/temporal.db in
+  volume `temporaldata`), gRPC 127.0.0.1:7233, UI http://localhost:8088 (container 8233). DEVIATION: the plan said
+  own Postgres or auto-setup; `temporalio/auto-setup` is unmaintained (last tag mid-2026) and the server+Postgres
+  setup needs schema tooling + new DB credentials. Production = temporalio/server on Postgres/Cassandra + UI.
+- MongoDB: `mongo:8.0.34`, 127.0.0.1:27017, NO auth locally (like Redis/Kafka), volume `mongodata`. Chassis
+  `smarthire_common/mongo.py` (init_mongo/get_db/close_mongo/mongo_ping_check) uses PyMongo's AsyncMongoClient
+  (DEVIATION: plan says Motor, which is deprecated). Chassis extras: `smarthire-common[temporal]`, `[mongo]`.
+- Chassis `temporal.py`: `connect(settings)` (cached client, retries every 5 s until Temporal is up),
+  `start_worker(settings, task_queue=, workflows=, activities=)` (background task, reconnects). Settings
+  `temporal_address` (temporal:7233), `temporal_namespace`, `temporal_enabled` (tests set False).
+  Chassis `kafka.RetryLater`: a handler raises it when a DEPENDENCY is down -> no retries/DLQ, seek back + retry.
+- `examples/temporal_hello/hello.py` (Step 9.2): worker/start demo; verified kill-worker-mid-timer -> resumes.
+- job_enrichment: port 8003 (127.0.0.1 only; internal read API, NOT routed by the gateway, no auth yet:
+  TODO Phase 10 service-to-service auth), Mongo db `enrichment`, collection `structured_jobs` (_id
+  "<job_id>:<version>", indexes ix_job_version + text index tx_search). Activities on `enrichment-tq`
+  (app/workflows/activities.py, called BY NAME): extract_skills (dictionary + aliases in app/domain/skills.py,
+  required skills first, + YAKE keywords), breakdown_jd (headings, then keyword phrases; app/domain/breakdown.py),
+  store_structured_job (replace_one upsert), delete_structured_job (compensation). API: GET /jobs/{id}/structured
+  (latest version), GET /search/jobs?q= (text search, newest version per job). Readiness: mongo. Worker runs in the
+  app's lifespan (stopping the container stops the worker).
+- Job publishing saga (services/job/app/workflows/publishing.py, workflow name "JobPublishingWorkflow", task queue
+  `job-tq`, id `publish-{job_id}-{version}`): set_processing (confirms PROCESSING at that version, returns content)
+  -> extract_skills -> breakdown_jd -> store_structured_job -> mark_ready. Per step: 5 attempts (1,2,4,8 s back-off),
+  start_to_close 20 s, schedule_to_close 60 s (so a missing worker fails the step in a minute). Failure: compensate
+  completed steps in reverse (delete_structured_job, registered only AFTER store succeeds; 10 min budget), then
+  mark_failed. Stale version (ApplicationError type "StaleJobVersion", non-retryable) -> "SUPERSEDED", no changes.
+  Job activities (app/workflows/activities.py): mark_ready/mark_failed = `jobs_repo.finish_publishing` (PROCESSING ->
+  READY/FAILED only at that version, version+1, published_at set once) + JobReady (full snapshot) / JobPublishFailed
+  in the same transaction; "already done" (status matches at version+1) counts as success (idempotent).
+- Reliable start (Step 9.5): publish_job and edits of READY jobs write `JobPublishRequested` {job_id, version}
+  (NEW event type, topic jobs.commands, schema registered by schema-init) with PROCESSING in one transaction.
+  Job consumer group `job-publisher` (app/events/handlers.py `build_handlers(settings)`) starts the workflow with
+  REJECT_DUPLICATE; WorkflowAlreadyStartedError ignored; Temporal RPC errors -> RetryLater. Job migration 0003 adds
+  processed_events. Old jobs left PROCESSING by earlier phases have no workflow (re-publish is impossible from
+  PROCESSING; set them FAILED/DRAFT by SQL if needed).
+- Tests: job's tests/test_publishing_workflow.py uses Temporal's time-skipping test server
+  (WorkflowEnvironment.start_time_skipping(), downloaded on first use) with the REAL workflow + Job activities on
+  Postgres and FAKE enrichment activities; module-level `pytest.mark.asyncio(loop_scope="module")`.
+  Enrichment tests use a Mongo testcontainer (mongo:8.0.34) and ActivityEnvironment. e2e `published_job()` helper
+  now uses the real saga. Live break-it verified: enrichment stopped -> FAILED after ~61 s (ActivityTaskTimedOut),
+  no structured doc; restarted + re-published -> READY in ~2 s.

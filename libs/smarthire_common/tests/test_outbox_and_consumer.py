@@ -11,7 +11,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 from smarthire_common import db, testing
 from smarthire_common.events import new_event
-from smarthire_common.kafka import EventConsumer, ProcessedEventMixin
+from smarthire_common.kafka import EventConsumer, ProcessedEventMixin, RetryLater
 from smarthire_common.models import NAMING_CONVENTION
 from smarthire_common.outbox import OutboxMixin, OutboxRelay, add_outbox_event
 
@@ -250,3 +250,16 @@ async def test_registry_outage_is_retried_not_dead_lettered(database):
     with pytest.raises(ConnectionError):  # run() then seeks back and tries again later
         await consumer.handle_message(FakeMessage(b"..."))
     assert consumer.dead_lettered == []
+
+
+async def test_retry_later_is_never_dead_lettered(database):
+    async def temporal_down(session, event):
+        raise RetryLater("temporal unreachable")
+
+    consumer = make_consumer({"UserRegistered": temporal_down}, max_attempts=3)
+    event = user_registered()
+    consumer._deserialize = lambda msg: event.model_dump(mode="json")
+    with pytest.raises(RetryLater):  # run() seeks back to the message and tries again later
+        await consumer.handle_message(FakeMessage(b"..."))
+    assert consumer.dead_lettered == []
+    assert await scalar("SELECT count(*) FROM processed_events") == 0  # not marked processed

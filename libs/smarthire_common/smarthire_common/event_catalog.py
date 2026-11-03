@@ -20,6 +20,8 @@ EVENT_TOPICS: dict[str, str] = {
     "JobReady": "jobs.lifecycle",
     "JobPublishFailed": "jobs.lifecycle",
     "JobClosed": "jobs.lifecycle",
+    # A COMMAND (please do X), not a fact: Job asks itself to start the publishing workflow (Phase 9)
+    "JobPublishRequested": "jobs.commands",
     "ResumeUploaded": "candidates.profile",
     "ResumeParsed": "candidates.profile",
     "ApplicationSubmitted": "applications.lifecycle",
