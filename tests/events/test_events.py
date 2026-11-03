@@ -228,3 +228,58 @@ def test_candidate_applies_to_a_job_known_only_through_events():
     other = {"Authorization": f"Bearer {other_token}", "Idempotency-Key": str(uuid.uuid4())}
     late = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]}, headers=other)
     assert late.status_code == 422 and late.json()["error"]["code"] == "JOB_NOT_OPEN"
+
+
+# ---------- Phase 10: resume parsing (Celery) + scoring + the application workflow ----------
+
+
+def candidate_with_parsed_resume(lines=None) -> tuple[str, dict]:
+    """A candidate with a complete profile and a resume parsed by the Celery worker."""
+    from resume_files import RESUME_LINES, make_pdf  # next to this file (pytest puts its folder on sys.path)
+
+    candidate_id, token = register()
+    auth = {"Authorization": f"Bearer {token}"}
+    wait_for(lambda: httpx.get(f"{GATEWAY}/candidates/me", headers=auth).status_code == 200, what="the profile")
+    # Eligibility (Application) uses the experience the candidate states in the profile
+    httpx.put(f"{GATEWAY}/candidates/me", json={"full_name": "Jane Doe", "experience_years": 3}, headers=auth)
+    pdf = make_pdf(lines or RESUME_LINES)
+    assert httpx.post(f"{GATEWAY}/candidates/me/resumes", files={"file": ("cv.pdf", pdf, "application/pdf")},
+                      headers=auth).status_code == 202
+    wait_for(lambda: httpx.get(f"{GATEWAY}/candidates/me", headers=auth).json()["active_resume"]["status"] == "PARSED",
+             timeout=30, what="the resume to be parsed")
+    return candidate_id, auth
+
+
+def test_uploaded_resume_is_parsed_in_the_background():
+    candidate_id, _ = candidate_with_parsed_resume()
+    events = [decode(m) for m in read_messages("candidates.profile", candidate_id, expected=2)]
+    assert [e["event_type"] for e in events] == ["ResumeUploaded", "ResumeParsed"]
+    parsed = events[1]["payload"]
+    assert "python" in parsed["skills"] and parsed["experience_years"] >= 9  # 2017 - present, from the PDF
+
+
+def test_application_is_scored_and_moved_to_screening():
+    _, recruiter_token = register("RECRUITER")
+    rec = {"Authorization": f"Bearer {recruiter_token}"}
+    job = published_job(recruiter_token, required_skills=["Python", "Kubernetes", "Rust"],
+                        eligibility_rules={"min_experience_years": 2})
+    wait_for(lambda: sql(f"SELECT status FROM application.job_replica WHERE job_id = '{job['id']}'") == "READY",
+             what="the replica")
+    _, auth = candidate_with_parsed_resume()
+    r = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]}, headers={**auth, "Idempotency-Key": str(uuid.uuid4())})
+    assert r.status_code == 202, r.text
+    application = r.json()
+
+    def screened():
+        board = httpx.get(f"{GATEWAY}/jobs/{job['id']}/applications", headers=rec).json()["items"]
+        return board and board[0]["status"] == "SCREENING" and board[0]
+
+    row = wait_for(screened, timeout=60, what="the workflow to score and screen the application")
+    # must-haves: python + kubernetes ("k8s" in the resume) of 3 -> 70 * 2/3; other job skills (kafka, sql
+    # from the description): none -> 0 of 10; experience 9 years >= 2 -> 20
+    assert row["score_status"] == "SCORED" and row["score"] == round(70 * 2 / 3 + 0 + 20, 2)
+    breakdown = httpx.get(f"http://localhost:8006/scores/{application['id']}").json()["breakdown"]
+    assert breakdown["missing_skills"] == ["rust"]
+    assert decode(read_messages("scoring.results", application["id"])[0])["event_type"] == "CandidateScored"
+    history = httpx.get(f"{GATEWAY}/applications/{application['id']}", headers=auth).json()["history"]
+    assert [h["to_stage"] for h in history] == ["SUBMITTED", "SCREENING"]

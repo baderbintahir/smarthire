@@ -28,3 +28,6 @@ class BaseServiceSettings(BaseSettings):
     temporal_address: str = "temporal:7233"
     temporal_namespace: str = "default"
     temporal_enabled: bool = True  # start the Temporal worker with the app; tests turn it off
+
+    # --- Background tasks (Phase 10); only used by services with Celery tasks ---
+    celery_broker_url: str = "amqp://guest:guest@rabbitmq:5672//"

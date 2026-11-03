@@ -96,6 +96,6 @@ def client(migrated, database_url, redis_url, tokens, candidates):
     testing.run(testing.truncate(database_url, TABLES))
     testing.run(testing.flush_redis(redis_url))
     settings = Settings(database_url=database_url, redis_url=redis_url, max_active_applications=MAX_ACTIVE,
-                        kafka_enabled=False, _env_file=None)
+                        kafka_enabled=False, temporal_enabled=False, _env_file=None)
     with TestClient(create_app(settings, key_provider=tokens.key_provider, candidate_client=candidates)) as c:
         yield c

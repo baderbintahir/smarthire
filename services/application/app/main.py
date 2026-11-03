@@ -11,11 +11,14 @@ from smarthire_common.logging import setup_logging
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
+from smarthire_common.temporal import start_worker
 
 from app.api import applications
 from app.config import Settings
 from app.events import handlers
 from app.repositories.candidate_api import CandidateClient, HttpCandidateClient
+from app.workflows import activities
+from app.workflows.processing import APPLICATION_TQ, ApplicationWorkflow
 
 
 def create_app(
@@ -46,8 +49,12 @@ def create_app(
         if settings.kafka_enabled:
             tasks = [
                 start_outbox_relay(settings),
-                start_consumer(settings, name=handlers.CONSUMER_NAME, topics=handlers.TOPICS, handlers=handlers.HANDLERS),
+                start_consumer(settings, name=handlers.CONSUMER_NAME, topics=handlers.TOPICS,
+                               handlers=handlers.build_handlers(settings)),
             ]
+        if settings.temporal_enabled:  # runs ApplicationWorkflow and our own activities (application-tq)
+            tasks.append(start_worker(settings, task_queue=APPLICATION_TQ, workflows=[ApplicationWorkflow],
+                                      activities=activities.ACTIVITIES))
         yield
         await stop_tasks(*tasks)
         await app.state.candidates.close()

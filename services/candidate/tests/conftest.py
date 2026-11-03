@@ -1,12 +1,19 @@
 """Test infrastructure: real Postgres, Redis and MinIO in throwaway containers, schema built by the
 real migrations. Every test starts with empty tables and an empty bucket."""
 
+import os
 from pathlib import Path
 
 import pytest
 from alembic import command
 from smarthire_common import testing
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+# Importing the Celery app (app.tasks) builds Settings() at import time, as the worker container does.
+# Placeholders so that import works in tests; the fixtures below use real test values.
+for _name, _value in {"DATABASE_URL": "postgresql+asyncpg://unused@localhost/unused", "S3_ACCESS_KEY": "unused",
+                      "S3_SECRET_KEY": "unused", "CELERY_BROKER_URL": "memory://"}.items():
+    os.environ.setdefault(_name, _value)
 
 SERVICE_DIR = Path(__file__).resolve().parents[1]
 TABLES = ["candidates", "resumes", "outbox", "processed_events"]

@@ -24,6 +24,13 @@ def get_db() -> AsyncDatabase:
     return _db
 
 
+def get_client() -> AsyncMongoClient:
+    """For transactions: `async with get_client().start_session() as s: async with await s.start_transaction(): ...`"""
+    if _client is None:
+        raise RuntimeError("Mongo not initialised: call init_mongo() at startup")
+    return _client
+
+
 async def close_mongo() -> None:
     global _client, _db
     if _client is not None:

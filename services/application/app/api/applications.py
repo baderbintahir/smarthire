@@ -119,6 +119,9 @@ async def add_note(
 
 @router.post("/applications/{application_id}/withdraw", response_model=ApplicationOut)
 async def withdraw(
-    application_id: uuid.UUID, user: CurrentUser = Depends(candidate_only), session: AsyncSession = Depends(get_session)
+    application_id: uuid.UUID, request: Request, user: CurrentUser = Depends(candidate_only),
+    session: AsyncSession = Depends(get_session),
 ):
-    return application_out(*await service.withdraw(session, user, application_id))
+    settings = request.app.state.settings
+    return application_out(*await service.withdraw(
+        session, user, application_id, settings=settings if settings.temporal_enabled else None))

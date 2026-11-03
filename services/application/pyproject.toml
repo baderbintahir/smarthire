@@ -3,7 +3,7 @@ name = "smarthire-application"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "smarthire-common",
+    "smarthire-common[temporal]",
     "uvicorn[standard]>=0.30",
     "alembic>=1.13",
 ]

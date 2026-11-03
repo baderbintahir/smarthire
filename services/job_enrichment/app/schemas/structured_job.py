@@ -13,6 +13,7 @@ class StructuredJobOut(BaseModel):
     job_id: str
     version: int
     skills: list[str]
+    required_skills: list[str] = []  # the recruiter's must-haves (a subset of skills); Scoring weighs these more
     keywords: list[str]
     sections: Sections
     created_at: datetime

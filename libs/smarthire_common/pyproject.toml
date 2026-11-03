@@ -20,6 +20,7 @@ dependencies = [
 # Only services that need them install these: `smarthire-common[temporal]`, `smarthire-common[mongo]`
 temporal = ["temporalio>=1.9"]
 mongo = ["pymongo>=4.10"]  # PyMongo's own async API (Motor, its predecessor, is deprecated)
+celery = ["celery>=5.4"]
 
 [dependency-groups]
 dev = [

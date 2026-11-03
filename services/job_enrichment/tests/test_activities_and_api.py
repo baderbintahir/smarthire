@@ -31,7 +31,7 @@ async def test_store_is_an_idempotent_upsert(mongo):
     await run(activities.store_structured_job, JOB, 1, data)  # a Temporal retry
     assert await count() == 1  # same _id "<job_id>:<version>": rewritten, not duplicated
     doc = await structured_jobs.latest(JOB)
-    assert doc["_id"] == f"{JOB}:1" and doc["skills"][0] == "python"
+    assert doc["_id"] == f"{JOB}:1" and doc["skills"][0] == "python" and doc["required_skills"] == ["python"]
 
 
 async def test_versions_are_separate_documents_and_latest_wins(mongo):

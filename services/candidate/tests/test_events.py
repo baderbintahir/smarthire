@@ -27,7 +27,7 @@ async def database(migrated, database_url):
 @pytest.fixture
 def consumer():
     return EventConsumer(
-        name=handlers.CONSUMER_NAME, topics=handlers.TOPICS, handlers=handlers.HANDLERS,
+        name=handlers.CONSUMER_NAME, topics=handlers.TOPICS, handlers=handlers.build_handlers(None),
         bootstrap_servers="unused", schema_registry_url="unused",
     )
 
@@ -43,7 +43,7 @@ async def count(sql: str) -> int:
 
 
 async def process(consumer, event) -> bool:
-    return await consumer.process(event, handlers.HANDLERS[event.event_type])
+    return await consumer.process(event, consumer.handlers[event.event_type])
 
 
 async def test_new_candidate_gets_an_empty_profile(database, consumer):

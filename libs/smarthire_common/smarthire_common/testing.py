@@ -57,6 +57,39 @@ def redis_container() -> Iterator[str]:
         yield f"redis://{redis.get_container_host_ip()}:{redis.get_exposed_port(6379)}/0"
 
 
+@contextmanager
+def mongo_replica_set(image: str = "mongo:8.0.34") -> Iterator[str]:
+    """MongoDB as a single-node replica set (transactions need one), like docker-compose.yml.
+    Yields a connection URL. No auth: a replica set with auth would also need a key file."""
+    from testcontainers.core.container import DockerContainer
+    from testcontainers.core.wait_strategies import LogMessageWaitStrategy
+
+    container = (DockerContainer(image).with_command("--replSet rs0 --bind_ip_all").with_exposed_ports(27017)
+                 .waiting_for(LogMessageWaitStrategy("Waiting for connections")))
+    with container:
+        result = container.exec(["mongosh", "--quiet", "--eval",
+                                 "rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'localhost:27017'}]}).ok"])
+        assert result.exit_code == 0, result.output
+        url = f"mongodb://{container.get_container_host_ip()}:{container.get_exposed_port(27017)}/?directConnection=true"
+        _wait_for_primary(url)
+        yield url
+
+
+def _wait_for_primary(url: str, timeout: float = 30.0) -> None:
+    import time
+
+    from pymongo import MongoClient
+
+    client, deadline = MongoClient(url), time.time() + timeout
+    try:
+        while not client.admin.command("hello").get("isWritablePrimary"):
+            if time.time() > deadline:
+                raise TimeoutError("replica set has no primary")
+            time.sleep(0.5)
+    finally:
+        client.close()
+
+
 def alembic_config(service_dir: Path, *, database_url: str, schema: str, extra_env: dict[str, str] | None = None):
     """An Alembic Config for the service's migrations. alembic/env.py builds the service's Settings()
     from the environment (as in the container), so the needed variables are set here."""

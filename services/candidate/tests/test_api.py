@@ -226,3 +226,16 @@ def test_readiness_includes_storage(client):
     r = client.get("/health/ready")
     assert r.status_code == 200, r.text
     assert "storage" in r.text
+
+
+# ---------------------------------------------------------------- internal API (Phase 10, for Scoring)
+
+
+def test_internal_resume_facts(client, with_profile):
+    user_id, headers = with_profile
+    assert client.get(f"/internal/candidates/{uuid.uuid4()}/resume").status_code == 404
+    assert client.get(f"/internal/candidates/{user_id}/resume").json()["resume"] is None
+    resume = upload(client, headers).json()
+    facts = client.get(f"/internal/candidates/{user_id}/resume").json()
+    assert facts["experience_years"] == 3.5  # from the profile (PROFILE fixture)
+    assert facts["resume"]["resume_id"] == resume["id"] and facts["resume"]["status"] == "UPLOADED"

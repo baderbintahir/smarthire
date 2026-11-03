@@ -3,11 +3,13 @@ name = "smarthire-candidate"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "smarthire-common",
+    "smarthire-common[celery]",
     "uvicorn[standard]>=0.30",
     "alembic>=1.13",
     "minio>=7.2",  # S3 client for MinIO (resume files)
     "python-multipart>=0.0.9",  # FastAPI needs it to parse file uploads (multipart/form-data)
+    "pypdf>=5.0",  # text from PDF resumes
+    "python-docx>=1.1",  # text from Word resumes
 ]
 
 [dependency-groups]

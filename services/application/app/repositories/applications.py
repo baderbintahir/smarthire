@@ -74,6 +74,17 @@ async def update_if(session: AsyncSession, application_id: uuid.UUID, *, version
     return result.rowcount == 1
 
 
+async def close_submitted(session: AsyncSession, job_id: uuid.UUID) -> list[tuple[uuid.UUID, uuid.UUID, str]]:
+    """The job closed: its SUBMITTED applications (not yet screened) become CLOSED. Returns their
+    (application_id, candidate_id, stage). Applications a recruiter is already working on stay open."""
+    result = await session.execute(
+        update(Application).where(Application.job_id == job_id, Application.status == "SUBMITTED")
+        .values(status="CLOSED", version=Application.version + 1, updated_at=func.now())
+        .returning(Application.id, Application.candidate_id, Application.current_stage)
+    )
+    return [(row.id, row.candidate_id, row.current_stage) for row in result]
+
+
 # ---------- reads ----------
 
 

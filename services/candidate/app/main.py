@@ -12,7 +12,7 @@ from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
 
-from app.api import candidates
+from app.api import candidates, internal
 from app.config import Settings
 from app.events import handlers
 from app.repositories.files import init_storage, storage_ping_check
@@ -50,7 +50,8 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
         if settings.kafka_enabled:
             tasks = [
                 start_outbox_relay(settings),
-                start_consumer(settings, name=handlers.CONSUMER_NAME, topics=handlers.TOPICS, handlers=handlers.HANDLERS),
+                start_consumer(settings, name=handlers.CONSUMER_NAME, topics=handlers.TOPICS,
+                               handlers=handlers.build_handlers(settings)),
             ]
         yield
         await stop_tasks(*tasks)
@@ -64,4 +65,5 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(candidates.router)
+    app.include_router(internal.router)
     return app

@@ -32,7 +32,8 @@ async def ensure_indexes() -> None:
 async def upsert(job_id: str, version: int, data: dict) -> None:
     await _collection().replace_one(
         {"_id": doc_id(job_id, version)},
-        {"job_id": job_id, "version": version, "skills": data["skills"], "keywords": data["keywords"],
+        {"job_id": job_id, "version": version, "skills": data["skills"],
+         "required_skills": data.get("required_skills", []), "keywords": data["keywords"],
          "sections": data["sections"], "created_at": datetime.now(UTC)},
         upsert=True,  # insert if missing, replace if present: same result however many times it runs
     )

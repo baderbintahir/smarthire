@@ -35,6 +35,20 @@ async def put(key: str, data: bytes, content_type: str) -> None:
     await asyncio.to_thread(client.put_object, bucket, key, io.BytesIO(data), len(data), content_type=content_type)
 
 
+async def get(key: str) -> bytes:
+    client, bucket = _get()
+
+    def download() -> bytes:
+        response = client.get_object(bucket, key)
+        try:
+            return response.read()
+        finally:
+            response.close()
+            response.release_conn()  # give the HTTP connection back to the pool
+
+    return await asyncio.to_thread(download)
+
+
 async def delete(key: str) -> None:
     client, bucket = _get()
     await asyncio.to_thread(client.remove_object, bucket, key)

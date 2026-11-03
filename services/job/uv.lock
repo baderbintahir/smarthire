@@ -1436,6 +1436,7 @@ temporal = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.29" },
+    { name = "celery", marker = "extra == 'celery'", specifier = ">=5.4" },
     { name = "confluent-kafka", extras = ["json", "schemaregistry"], specifier = ">=2.6" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
@@ -1448,7 +1449,7 @@ requires-dist = [
     { name = "temporalio", marker = "extra == 'temporal'", specifier = ">=1.9" },
     { name = "uuid6", specifier = ">=2024.1.12" },
 ]
-provides-extras = ["temporal", "mongo"]
+provides-extras = ["temporal", "mongo", "celery"]
 
 [package.metadata.requires-dev]
 dev = [

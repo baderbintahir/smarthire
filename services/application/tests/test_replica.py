@@ -22,7 +22,7 @@ async def database(migrated, database_url):
 
 @pytest.fixture
 def consumer():
-    return EventConsumer(name=handlers.CONSUMER_NAME, topics=handlers.TOPICS, handlers=handlers.HANDLERS,
+    return EventConsumer(name=handlers.CONSUMER_NAME, topics=handlers.TOPICS, handlers=handlers.build_handlers(None),
                          bootstrap_servers="unused", schema_registry_url="unused")
 
 
@@ -41,7 +41,7 @@ def closed(version):
 
 
 async def deliver(consumer, event):
-    return await consumer.process(event, handlers.HANDLERS[event.event_type])
+    return await consumer.process(event, consumer.handlers[event.event_type])
 
 
 async def replica():

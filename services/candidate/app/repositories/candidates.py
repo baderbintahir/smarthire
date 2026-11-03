@@ -32,6 +32,26 @@ async def create_empty(session: AsyncSession, candidate_id: uuid.UUID) -> None:
     await session.execute(insert(Candidate).values(id=candidate_id).on_conflict_do_nothing(index_elements=[Candidate.id]))
 
 
+async def get_resume(session: AsyncSession, resume_id: uuid.UUID) -> Resume | None:
+    return await session.get(Resume, resume_id)
+
+
+async def mark_resume_parsed(session: AsyncSession, resume_id: uuid.UUID, parsed: dict) -> bool:
+    """UPLOADED -> PARSED, only if still UPLOADED (a duplicate task run finds 0 rows: False)."""
+    result = await session.execute(
+        update(Resume).where(Resume.id == resume_id, Resume.status == "UPLOADED")
+        .values(status="PARSED", parsed_data=parsed, parse_error=None, parsed_at=func.now())
+    )
+    return result.rowcount == 1
+
+
+async def mark_resume_failed(session: AsyncSession, resume_id: uuid.UUID, error: str) -> None:
+    await session.execute(
+        update(Resume).where(Resume.id == resume_id, Resume.status == "UPLOADED")
+        .values(status="FAILED", parse_error=error[:1000], parsed_at=func.now())
+    )
+
+
 async def active_resume(session: AsyncSession, candidate_id: uuid.UUID) -> Resume | None:
     # Served by the partial unique index uq_resumes_one_active (it holds active rows only)
     stmt = select(Resume).where(Resume.candidate_id == candidate_id, Resume.is_active)

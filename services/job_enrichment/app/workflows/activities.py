@@ -8,7 +8,7 @@ delete-if-present). The names are the contract with the workflow, which calls th
 from temporalio import activity
 
 from app.domain.breakdown import breakdown
-from app.domain.skills import extract_keywords
+from app.domain.skills import extract_keywords, normalize
 from app.domain.skills import extract_skills as find_skills
 from app.repositories import structured_jobs
 
@@ -18,7 +18,11 @@ TASK_QUEUE = "enrichment-tq"
 @activity.defn(name="extract_skills")
 async def extract_skills(job_id: str, version: int, description: str, required_skills: list[str]) -> dict:
     activity.logger.info("extracting skills for job %s v%s", job_id, version)
-    return {"skills": find_skills(description, required_skills), "keywords": extract_keywords(description)}
+    return {
+        "skills": find_skills(description, required_skills),  # everything: required first, then found in text
+        "required_skills": list(dict.fromkeys(normalize(s) for s in required_skills if s.strip())),
+        "keywords": extract_keywords(description),
+    }
 
 
 @activity.defn(name="breakdown_jd")

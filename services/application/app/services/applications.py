@@ -17,6 +17,7 @@ from app.repositories import applications as repo
 from app.repositories import job_replica as jobs
 from app.repositories.candidate_api import CandidateClient
 from app.schemas.application import application_out
+from app.services import workflows
 from app.services.idempotency import IdempotencyStore
 
 
@@ -181,7 +182,8 @@ async def add_note(session: AsyncSession, user: CurrentUser, application_id: uui
     return note
 
 
-async def withdraw(session: AsyncSession, user: CurrentUser, application_id: uuid.UUID) -> tuple[Application, JobReplica]:
+async def withdraw(session: AsyncSession, user: CurrentUser, application_id: uuid.UUID, *,
+                   settings=None) -> tuple[Application, JobReplica]:
     application, job, relation = await _load(session, application_id, user)
     if relation != "candidate":
         raise ApplicationNotFoundError()  # only the applicant withdraws
@@ -193,6 +195,8 @@ async def withdraw(session: AsyncSession, user: CurrentUser, application_id: uui
     # TODO: no event for withdrawals in the catalog yet (Notification/Analytics may want one later)
     await session.commit()
     await session.refresh(application)
+    if settings is not None:  # after the commit: stop the application's workflow (best effort)
+        await workflows.signal(settings, str(application.id), "withdraw")
     return application, job
 
 

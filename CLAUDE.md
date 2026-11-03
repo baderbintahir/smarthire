@@ -92,7 +92,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 7 Kafka + outbox: [x] 7.1 kafka/registry/ui · [x] 7.2 envelope + schemas · [x] 7.3 outbox writer · [x] 7.4 relay · [x] 7.5 idempotent consumer · [x] 7.6 UserRegistered -> profile · [x] 7.7 job events (chassis 83, identity 37, job 79, candidate 67, gateway 12, events e2e 6; break-it verified)
 - [x] Phase 8 Application service: [x] 8.1 models · [x] 8.2 job replica consumer · [x] 8.3 submit (idempotency, quota lock) · [x] 8.4 views · [x] 8.5 stage/notes/decision/withdraw (67 tests; gateway 13, events e2e 7; live race: 20 applies, quota 10 -> exactly 10)
 - [x] Phase 9 Temporal + job publishing saga: [x] 9.1 temporal + mongo · [x] 9.2 hello world · [x] 9.3 job_enrichment · [x] 9.4 JobPublishingWorkflow · [x] 9.5 reliable start (job 89, enrichment 12, chassis 86, events e2e 8; break-it verified)
-- [ ] Phase 10 Resume parsing, scoring, application workflow
+- [x] Phase 10 Resume parsing, scoring, application workflow: [x] 10.1 rabbitmq + celery · [x] 10.2 parse_resume · [x] 10.3 scoring · [x] 10.4 ApplicationWorkflow · [x] 10.5 job closure (candidate 86, application 78, scoring 13, events e2e 10; break-its verified)
 - [ ] Phase 11 Notification
 - [ ] Phase 12 Analytics
 - [ ] Phase 12B BFF (API composition)
@@ -102,7 +102,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit Phase 9 if not done, then Phase 10 (resume parsing, scoring, application workflow).
+**Next step:** Phase 11 (Notification) if not done, then Phase 12 (Analytics).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -469,3 +469,49 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   Enrichment tests use a Mongo testcontainer (mongo:8.0.34) and ActivityEnvironment. e2e `published_job()` helper
   now uses the real saga. Live break-it verified: enrichment stopped -> FAILED after ~61 s (ActivityTaskTimedOut),
   no structured doc; restarted + re-published -> READY in ~2 s.
+- Phase 10 was built in one pass at the user's request (with Phase 11; separate commits).
+- Infra: RabbitMQ `rabbitmq:4.1.8-management` (127.0.0.1:5672, UI 127.0.0.1:15672 guest/guest; guest allowed
+  from other containers via `-rabbit loopback_users []`, local dev only), volume `rabbitmqdata`. MongoDB now runs
+  as a SINGLE-NODE REPLICA SET rs0 (healthcheck initiates it) because Mongo transactions need one; clients use
+  `?directConnection=true`. ALL service ports are now published on 127.0.0.1 only (clients go through the gateway;
+  /internal/* endpoints must not be reachable from the LAN).
+- Chassis: `skills.py` (the skills dictionary MOVED here from job_enrichment: shared by Enrichment, Candidate,
+  Scoring), `celery.py` (extra `celery`: `make_celery(name, broker, default_queue=)` with acks_late,
+  reject_on_worker_lost, prefetch 1, json, no result backend; `run_async(coro)` = one event loop per worker
+  process), `mongo_outbox.py` (Mongo `outbox` collection: `add_outbox_event(event, key=, session=)` inside a Mongo
+  transaction; `MongoOutboxRelay` reuses OutboxRelay's loop + KafkaSender; no SKIP LOCKED), `mongo.get_client()`,
+  `testing.mongo_replica_set()`. Setting `celery_broker_url` (amqp://guest:guest@rabbitmq:5672//).
+- Candidate parsing: worker container `candidate-worker` (same image; `celery -A app.tasks.celery_app worker -Q
+  resumes`). Upload -> ResumeUploaded (outbox) -> Candidate's OWN consumer (topic candidates.profile) enqueues
+  `parse_resume` by name (`send_task`, app/tasks/names.py; RabbitMQ down -> RetryLater). Task (app/tasks/parsing.py)
+  autoretries transient errors (backoff, max 5) and calls app/services/parsing.py: only UPLOADED resumes; download
+  from MinIO; pypdf / python-docx text; app/domain/resume_parser.py (shared skills dictionary, experience = max of
+  "N years" claims and merged date ranges, education levels); conditional UPDATE to PARSED + ResumeParsed outbox in
+  one transaction; unreadable file -> FAILED with parse_error (not retried). celery_app.py builds Settings() at
+  import: candidate tests set placeholder env vars in conftest. Internal API `GET /internal/candidates/{id}/resume`
+  (profile experience + active resume status/parsed_data) for Scoring; no auth (network only; TODO Phase 14).
+- Enrichment now also stores `required_skills` (normalized recruiter must-haves) in structured_jobs.
+- Scoring service (port 8006, 127.0.0.1, Mongo db `scoring`, internal `GET /scores/{application_id}`): activity
+  `score_application(application_id, candidate_id, job_id, min_experience_years)` on scoring-tq (4th arg is an
+  addition to the plan's signature: the job's minimum comes from Application's replica). Calls Candidate and
+  Enrichment internal APIs (app/repositories/peers.py). Resume UPLOADED -> retryable error; no resume / FAILED /
+  no structured job -> non-retryable ApplicationError type "CannotScore". Formula (app/domain/scoring.py): 70 x
+  share of required skills + 10 x share of other job skills + 20 x min(1, years/min) (no min: 20 if years known,
+  else 10); breakdown matched/missing/experience_match. Score doc (_id application_id) + CandidateScored in ONE
+  Mongo transaction; event only on first scoring. MongoOutboxRelay publishes it.
+- ApplicationWorkflow (application/app/workflows/processing.py, application-tq, id `app-{application_id}`):
+  init_stages (LOCAL activity) -> score_application (scoring-tq; retries 2 s..1 min, schedule_to_close 10 min) ->
+  record_score_and_advance (score or PENDING_MANUAL; SUBMITTED -> SCREENING + history by SYSTEM_ACTOR uuid 0 +
+  ApplicationStageChanged; if a recruiter already moved it only the score is saved; inactive -> nothing). Signals
+  `withdraw`, `job_closed` stop it (result WITHDRAWN / JOB_CLOSED). Started by Application's consumer from its own
+  ApplicationSubmitted (topics now jobs.lifecycle + applications.lifecycle; REJECT_DUPLICATE; RetryLater).
+  Withdraw signals after commit (best effort, app/services/workflows.py `signal`, 3 s timeout).
+- JobClosed (10.5): replica CLOSED, then SUBMITTED applications -> CLOSED (+ history, quota -1), commit, then
+  `job_closed` signals. Applications already SCREENING/IN_PROGRESS stay open (the recruiter finishes them).
+- Temporal test server note: it can't fast-forward while an activity waits in a queue with NO worker (even
+  env.sleep times out), so the 10-minute scoring deadline is checked by config and live, not in a test.
+- First start of the new consumer groups replayed old ApplicationSubmitted events: old test applications got
+  workflows and became PENDING_MANUAL/CLOSED (their fake PDFs can't be parsed). Expected.
+- e2e: tests/events/resume_files.py (copy of candidate's PDF/DOCX generators). Live break-its verified: worker
+  stopped -> resume stays UPLOADED, restarted -> PARSED in ~4 s; Scoring stopped -> application stays SUBMITTED,
+  restarted -> SCREENING with score in ~4 s.
