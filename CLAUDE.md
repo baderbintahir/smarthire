@@ -94,7 +94,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 9 Temporal + job publishing saga: [x] 9.1 temporal + mongo · [x] 9.2 hello world · [x] 9.3 job_enrichment · [x] 9.4 JobPublishingWorkflow · [x] 9.5 reliable start (job 89, enrichment 12, chassis 86, events e2e 8; break-it verified)
 - [x] Phase 10 Resume parsing, scoring, application workflow: [x] 10.1 rabbitmq + celery · [x] 10.2 parse_resume · [x] 10.3 scoring · [x] 10.4 ApplicationWorkflow · [x] 10.5 job closure (candidate 86, application 78, scoring 13, events e2e 10; break-its verified)
 - [x] Phase 11 Notification: [x] 11.1 mailpit + tables · [x] 11.2 consumers -> tasks · [x] 11.3 sending, retries, circuit breaker (notification 17, identity 38, gateway 14, events e2e 11; break-it verified)
-- [ ] Phase 12 Analytics
+- [x] Phase 12 Analytics: [x] 12.1 projections · [x] 12.2 consumers · [x] 12.3 metrics API · [x] 12.4 rebuild (analytics 8, events e2e 13: metrics follow actions, rebuild identical)
 - [ ] Phase 12B BFF (API composition)
 - [ ] Phase 13 Observability
 - [ ] Phase 14 Reliability + load tests (tag v0.1-core)
@@ -102,7 +102,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** Phase 12 (Analytics).
+**Next step:** Phase 12B (BFF) if not done, then Phase 13 (Observability).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -545,3 +545,33 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - Live break-it verified: Mailpit stopped -> recruiter decision still 200 in 0.03 s, email row QUEUED with
   attempts=1 and the error; Mailpit restarted -> SENT (attempts=3). e2e test: JOB_READY to the recruiter, two
   candidate emails, replaying ApplicationSubmitted sends nothing new.
+- Phase 12 was built in one pass at the user's request (with 12B; separate commits).
+- FIXES FOUND IN PHASE 12 (affect every service):
+  - Dockerfiles: `CMD ["sh", "-c", "exec uvicorn ..."]`. Without `exec`, sh was PID 1, swallowed SIGTERM, and Docker
+    SIGKILLed services after 10 s: NO graceful shutdown ever (consumers never left their group: rebuild saw stale
+    members for 45 s). Celery workers use exec-form commands already. Copy `exec` into any new Dockerfile.
+  - APISIX `apisix.dns_resolver_valid: 10` (config.yaml): recreated containers get new IPs; the gateway cached old
+    ones and returned 502 until restarted. Verified: identity moved .15 -> .21, gateway followed with no restart.
+- Analytics (port 8008 127.0.0.1, schema/user analytics, Redis cache + denylist): projections exactly per E.9 PLUS
+  `published_jobs(job_id, first_published_at)` (deviation: "jobs published, first version only" can't be told from
+  job_application_counts, whose row may be created by an application event arriving before JobReady; topics have
+  no order between them). All writes are upserts in the consumer's transaction (processed_events); timeline also
+  guards with INSERT ... ON CONFLICT DO NOTHING. Times come from event.occurred_at (rebuild must be identical).
+  Consumer group `analytics` on identity.users, jobs.lifecycle, applications.lifecycle, scoring.results,
+  system.failures, assistant.usage. "Interview stage" = to_stage name containing "interview" (recruiters name
+  stages freely). JobPublishFailed counts as a failure (source job_publishing_workflow). NEW event type
+  `SystemFailure` {source, kind WORKFLOW_FAILED|DEAD_LETTER|ERROR, detail?} on system.failures (registered;
+  producers come in Phase 13).
+- Metrics API `GET /analytics/metrics` (RECRUITER/ADMIN; via gateway /api/analytics/metrics): all 9 metrics in one
+  response (counters, applications_over_time last 30 days, application_to_interview_rate, average_days_to_hire,
+  most_applied_jobs top 5, average_applications_per_candidate, failures_last_30_days), cached in Redis
+  `metrics:dashboard` for `metrics_cache_seconds` (10).
+- Rebuild (12.4): `docker compose stop analytics && docker compose run --rm analytics python -m app.cli rebuild &&
+  docker compose start analytics`. It waits (<= 60 s) for the group to be empty, truncates projections +
+  processed_events, replays every topic from the start with chassis `EventConsumer.replay_from_beginning()`
+  (on_assign -> OFFSET_BEGINNING, stops at the high watermarks captured at start, commits offsets), clears the cache.
+  e2e test proves identical numbers.
+- Counters vs source DBs: equal for everything that produced events. Users registered before Phase 7 (no outbox
+  then) and SQL-forced job states are invisible to Analytics by design; a backfill would need synthetic events.
+- e2e changes: the DLQ test now expects one DLQ copy per consumer group on identity.users (candidate, analytics);
+  `wait_for` ignores httpx errors (services restarting); "service not deployed" gateway test uses /api/assistant.

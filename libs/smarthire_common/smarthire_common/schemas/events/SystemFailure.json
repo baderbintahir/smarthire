@@ -1,0 +1,35 @@
+{
+  "description": "Something failed that operators should see (a workflow gave up, a message was dead-lettered). Counted per day and source by Analytics.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "source",
+    "kind"
+  ],
+  "properties": {
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "description": "who failed: a service or workflow name"
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "WORKFLOW_FAILED",
+        "DEAD_LETTER",
+        "ERROR"
+      ]
+    },
+    "detail": {
+      "type": "string",
+      "maxLength": 1000
+    }
+  },
+  "examples": [
+    {
+      "source": "candidate",
+      "kind": "DEAD_LETTER",
+      "detail": "identity.users: not JSON"
+    }
+  ]
+}

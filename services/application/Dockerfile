@@ -28,5 +28,8 @@ USER app
 ENV PATH="/app/services/application/.venv/bin:$PATH" PORT=8005
 EXPOSE 8005
 
-# --factory: call create_app() to build the app (so tests can pass their own settings)
-CMD ["sh", "-c", "uvicorn app.main:create_app --factory --host 0.0.0.0 --port ${PORT}"]
+# --factory: call create_app() to build the app (so tests can pass their own settings).
+# `exec`: uvicorn REPLACES the shell as process 1, so it receives Docker's stop signal (SIGTERM) and
+# shuts down gracefully (consumers leave their group, background tasks stop). Without exec, sh gets the
+# signal, doesn't pass it on, and Docker kills everything 10 s later.
+CMD ["sh", "-c", "exec uvicorn app.main:create_app --factory --host 0.0.0.0 --port ${PORT}"]

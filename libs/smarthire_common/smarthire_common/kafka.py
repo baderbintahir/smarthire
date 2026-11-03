@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 
-from confluent_kafka import Consumer, KafkaError, Message, Producer, TopicPartition
+from confluent_kafka import OFFSET_BEGINNING, Consumer, KafkaError, Message, Producer, TopicPartition
 from confluent_kafka.schema_registry import SchemaRegistryClient, topic_record_subject_name_strategy
 from confluent_kafka.schema_registry.json_schema import JSONDeserializer, JSONSerializer
 from confluent_kafka.serialization import MessageField, SerializationContext, SerializationError
@@ -174,6 +174,40 @@ class EventConsumer:
                 await asyncio.to_thread(consumer.commit, message=msg, asynchronous=False)
         finally:
             await asyncio.to_thread(consumer.close)  # leave the group cleanly: partitions move on at once
+
+    async def replay_from_beginning(self) -> int:
+        """Re-read the topics from their FIRST message up to where they end right now, process every
+        message like run() does, commit offsets, then stop. Used to rebuild a read model (Analytics,
+        Step 12.4). The service's own consumer must be stopped meanwhile: the group would otherwise
+        split the partitions between the two. Returns how many messages were read."""
+        consumer = Consumer({"bootstrap.servers": self._bootstrap_servers, "group.id": self.name,
+                             "enable.auto.commit": False, "logger": logging.getLogger("librdkafka")})
+
+        def from_the_start(c, partitions):
+            for partition in partitions:
+                partition.offset = OFFSET_BEGINNING  # ignore the group's saved bookmark
+            c.assign(partitions)
+
+        consumer.subscribe(self.topics, on_assign=from_the_start)
+        ends: dict[tuple[str, int], int] = {}  # where each partition ends NOW (later messages: run()'s job)
+        read = 0
+        try:
+            while True:
+                msg = await asyncio.to_thread(consumer.poll, 1.0)
+                if not ends and consumer.assignment():
+                    for tp in consumer.assignment():
+                        low, high = await asyncio.to_thread(consumer.get_watermark_offsets, tp, 10)
+                        ends[(tp.topic, tp.partition)] = high if high > low else -1  # -1: empty, nothing to read
+                if msg is not None and not msg.error():
+                    await self.handle_message(msg)
+                    await asyncio.to_thread(consumer.commit, message=msg, asynchronous=False)
+                    read += 1
+                    if ends and msg.offset() + 1 >= ends.get((msg.topic(), msg.partition()), 0):
+                        ends[(msg.topic(), msg.partition())] = -1  # this partition is done
+                if ends and all(end == -1 for end in ends.values()):
+                    return read
+        finally:
+            await asyncio.to_thread(consumer.close)
 
     # ---- one message (testable without Kafka) ----
 

@@ -54,8 +54,11 @@ def sql(query: str) -> str:
 def wait_for(check, timeout=20.0, what="condition"):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if result := check():
-            return result
+        try:
+            if result := check():
+                return result
+        except httpx.HTTPError:
+            pass  # a service restarting: not ready yet
         time.sleep(0.5)
     raise AssertionError(f"timed out waiting for {what}")
 
@@ -129,15 +132,16 @@ def test_replayed_event_is_skipped_by_the_consumer():
 
 
 def test_unreadable_message_goes_to_the_dead_letter_queue():
+    """Every consumer GROUP on identity.users (Candidate, Analytics) parks its own copy, independently."""
     key = f"poison-{uuid.uuid4()}"
     producer = Producer(KAFKA)
     producer.produce("identity.users", key=key, value=b"this is not an event")
     producer.flush(10)
-    [dead] = read_messages("identity.users.dlq", key)
-    headers = dict(dead.headers())
-    assert dead.value() == b"this is not an event"  # kept unchanged for a human to inspect
-    assert headers["x-consumer"] == b"candidate" and headers["x-original-topic"] == b"identity.users"
-    assert headers["x-error"]
+    dead = read_messages("identity.users.dlq", key, expected=2)
+    assert all(m.value() == b"this is not an event" for m in dead)  # kept unchanged for a human to inspect
+    headers = [dict(m.headers()) for m in dead]
+    assert {h["x-consumer"] for h in headers} == {b"candidate", b"analytics"}
+    assert all(h["x-original-topic"] == b"identity.users" and h["x-error"] for h in headers)
 
 
 # ---------- 7.7 job events ----------
@@ -317,3 +321,53 @@ def test_hiring_flow_sends_emails_once():
     producer.flush(10)
     time.sleep(5)
     assert emails_to(candidate_id) == expected
+
+
+# ---------- Phase 12: analytics (CQRS read model) ----------
+
+
+def metrics(token: str) -> dict:
+    return httpx.get(f"{GATEWAY}/analytics/metrics", headers={"Authorization": f"Bearer {token}"}).json()
+
+
+def fresh_metrics(token: str, check, what: str) -> dict:
+    """Metrics are cached ~10 s and fed asynchronously: poll until the check passes."""
+    return wait_for(lambda: (m := metrics(token)) and check(m) and m, timeout=40, what=what)
+
+
+def test_metrics_follow_what_happens():
+    _, recruiter_token = register("RECRUITER")
+    time.sleep(12)  # let earlier tests' events land and the 10 s metrics cache expire: a clean "before"
+    before = fresh_metrics(recruiter_token, lambda m: m["total_recruiters"] > 0, "the first metrics")
+    job = published_job(recruiter_token, title="Analytics Engineer")
+    _, auth = candidate_with_parsed_resume()
+    wait_for(lambda: sql(f"SELECT status FROM application.job_replica WHERE job_id = '{job['id']}'") == "READY",
+             what="the replica")
+    r = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]}, headers={**auth, "Idempotency-Key": str(uuid.uuid4())})
+    assert r.status_code == 202, r.text
+
+    after = fresh_metrics(recruiter_token, lambda m: m["total_applications"] == before["total_applications"] + 1,
+                          "the application to be counted")
+    assert after["total_candidates"] == before["total_candidates"] + 1
+    assert after["total_recruiters"] == before["total_recruiters"]  # registered before the snapshot
+    assert after["total_jobs_published"] == before["total_jobs_published"] + 1
+    assert any(j["job_id"] == job["id"] and j["applications"] == 1 for j in after["most_applied_jobs"]) or \
+        len(after["most_applied_jobs"]) == 5  # in the top 5 unless 5 jobs already have more
+    assert httpx.get(f"{GATEWAY}/analytics/metrics", headers=auth).status_code == 403  # candidates: no
+
+
+def test_rebuild_from_events_gives_identical_numbers():
+    """Step 12.4: empty the read model, replay every topic from the start, compare."""
+    _, token = register("RECRUITER")
+    time.sleep(12)  # let in-flight events land and the 10 s cache expire
+    before = metrics(token)
+    subprocess.run(["docker", "compose", "stop", "analytics"], check=True, capture_output=True)
+    try:
+        out = subprocess.run(["docker", "compose", "run", "--rm", "-T", "analytics", "python", "-m", "app.cli", "rebuild"],
+                             check=True, capture_output=True, text=True).stdout
+        assert "rebuilt the analytics read model from" in out
+    finally:
+        subprocess.run(["docker", "compose", "start", "analytics"], check=True, capture_output=True)
+    wait_for(lambda: httpx.get("http://localhost:8008/health/ready").status_code == 200, what="analytics to restart")
+    after = metrics(token)
+    assert after == before

@@ -13,6 +13,10 @@ apisix:
   # Our own Lua plugins live under infra/apisix/plugins, mounted at
   # /usr/local/apisix/custom/apisix/plugins/<name>.lua
   extra_lua_path: "/usr/local/apisix/custom/?.lua"
+  # Re-resolve service names (identity, job, ...) at least every 10 s. Recreating a container (e.g.
+  # `docker compose up --build`) gives it a NEW IP; with a long DNS cache the gateway kept sending
+  # requests to the old address (502 "connection refused") until it was restarted.
+  dns_resolver_valid: 10
   # Status API for the container healthcheck: GET /status/ready (localhost only)
   status:
     ip: 127.0.0.1

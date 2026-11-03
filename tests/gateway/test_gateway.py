@@ -77,7 +77,7 @@ def test_unknown_path_is_json_404():
 
 def test_service_not_deployed_is_json_503():
     _, token = new_user()  # authenticated route: the token is checked before the upstream is tried
-    r = httpx.get(f"{GATEWAY}/api/analytics", headers=bearer(token))  # no analytics service yet
+    r = httpx.get(f"{GATEWAY}/api/assistant", headers=bearer(token))  # no AI assistant until Phase 16
     assert r.status_code == 503
     assert r.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
 

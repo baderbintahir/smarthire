@@ -29,6 +29,8 @@ EVENT_TOPICS: dict[str, str] = {
     "ApplicationDecisionMade": "applications.lifecycle",
     "CandidateScored": "scoring.results",
     "AssistantQueryCompleted": "assistant.usage",
+    # Operational failures (dead-lettered messages, failed workflows): produced from Phase 13, counted by Analytics
+    "SystemFailure": "system.failures",
 }
 
 

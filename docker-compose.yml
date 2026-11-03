@@ -284,6 +284,30 @@ services:
       - "127.0.0.1:1025:1025"                      # SMTP
       - "127.0.0.1:8025:8025"                      # web UI + API: http://localhost:8025
 
+  analytics:
+    build:
+      context: .
+      dockerfile: services/analytics/Dockerfile
+    environment:
+      SERVICE_NAME: analytics
+      PORT: "8008"
+      DATABASE_URL: postgresql+asyncpg://analytics_user:${ANALYTICS_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_SCHEMA: analytics
+      REDIS_URL: redis://redis:6379/0              # token denylist + metrics cache
+      FORWARDED_ALLOW_IPS: 172.30.0.10
+    ports:
+      - "127.0.0.1:8008:8008"                      # debugging only: clients go through the gateway
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8008/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   # ------------------------------------------------------------ workflows + documents (Phase 9)
   temporal:
     # Temporal's dev server (temporal CLI): server + Web UI in one process, state in a SQLite file.
