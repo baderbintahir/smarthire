@@ -152,6 +152,31 @@ services:
       timeout: 3s
       retries: 5
 
+  application:
+    build:
+      context: .                                   # repo root: the image needs libs/ too
+      dockerfile: services/application/Dockerfile
+    environment:
+      SERVICE_NAME: application
+      PORT: "8005"
+      DATABASE_URL: postgresql+asyncpg://application_user:${APPLICATION_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_SCHEMA: application
+      REDIS_URL: redis://redis:6379/0              # token denylist + idempotency keys
+      CANDIDATE_URL: http://candidate:8004         # applicant's profile at apply time (user's own token)
+      FORWARDED_ALLOW_IPS: 172.30.0.10             # trust X-Forwarded-For only from the gateway
+    ports:
+      - "8005:8005"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:                                   # slim image has no curl, so use python
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   # ------------------------------------------------------------ events (Phase 7)
   kafka:
     image: apache/kafka:4.3.1                      # official image; KRaft mode, no ZooKeeper

@@ -24,10 +24,12 @@ class AppError(Exception):
         code: str | None = None,
         http_status: int | None = None,
         headers: dict[str, str] | None = None,
+        details=None,
     ):
         super().__init__(message)
         self.message = message
         self.headers = headers or {}  # extra response headers, e.g. Retry-After
+        self.details = details  # optional machine-readable specifics, e.g. every failed rule
         if code is not None:
             self.code = code
         if http_status is not None:
@@ -91,7 +93,7 @@ def _error_response(
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def handle_app_error(request: Request, exc: AppError):
-        return _error_response(exc.http_status, exc.code, exc.message, headers=exc.headers)
+        return _error_response(exc.http_status, exc.code, exc.message, exc.details, headers=exc.headers)
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError):

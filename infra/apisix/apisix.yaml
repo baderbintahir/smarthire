@@ -131,6 +131,15 @@ routes:
       proxy-rewrite: { regex_uri: ["^/api/identity/(.*)", "/$1"] }
 
   # --- Other services: only /api stripped (each owns a resource-named path: /jobs, ...)
+  - id: job-applications                      # recruiter board: GET /api/jobs/{id}/applications
+    uri: /api/jobs/*                            # lives in Application (it owns applications), under
+    vars: [["uri", "~~", "^/api/jobs/[^/]+/applications$"]]   # the job's URL; vars narrows the match
+    priority: 10                                # checked before the jobs routes below (default 0)
+    upstream_id: application
+    plugin_config_id: authenticated
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
+
   - id: jobs-public-read                        # public job board; the service handles optional
     uris: [/api/jobs, /api/jobs/*]              # auth itself (recruiters see their own drafts)
     methods: [GET]

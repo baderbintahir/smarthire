@@ -90,7 +90,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 5 Job service: [x] 5.1 scaffold + models · [x] 5.2 state machine · [x] 5.3 CRUD · [x] 5.4 publish stub
 - [x] Phase 6 Candidate service: [x] 6.1 scaffold + models + MinIO · [x] 6.2 profile endpoints · [x] 6.3 resume upload (60 tests + 12 gateway tests pass; live: files in bucket, rows in DB, 415/413 at service, 413 at gateway, anonymous GET 403)
 - [x] Phase 7 Kafka + outbox: [x] 7.1 kafka/registry/ui · [x] 7.2 envelope + schemas · [x] 7.3 outbox writer · [x] 7.4 relay · [x] 7.5 idempotent consumer · [x] 7.6 UserRegistered -> profile · [x] 7.7 job events (chassis 83, identity 37, job 79, candidate 67, gateway 12, events e2e 6; break-it verified)
-- [ ] Phase 8 Application service
+- [x] Phase 8 Application service: [x] 8.1 models · [x] 8.2 job replica consumer · [x] 8.3 submit (idempotency, quota lock) · [x] 8.4 views · [x] 8.5 stage/notes/decision/withdraw (67 tests; gateway 13, events e2e 7; live race: 20 applies, quota 10 -> exactly 10)
 - [ ] Phase 9 Temporal + job publishing saga
 - [ ] Phase 10 Resume parsing, scoring, application workflow
 - [ ] Phase 11 Notification
@@ -102,7 +102,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** commit Phase 7 if not done, then Phase 8 (Application service), step by step again.
+**Next step:** commit Phase 8 if not done, then Phase 9 (Temporal + job publishing saga), step by step unless the user asks for one pass.
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -392,3 +392,38 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - Known limits (documented, accepted for now): a row that can't be serialized stays unpublished and is retried
   forever (logged); with SEVERAL relay replicas, SKIP LOCKED can reorder one key's events across batches
   (consumers must use version guards); outbox/processed_events cleanup jobs (E.14) not built yet.
+- Phase 8 (8.1-8.5) was built in one pass at the user's request (one-off, like Phases 2, 4-7).
+- Application service: port 8005, schema/user `application`/`application_user`, models in app/models/application.py
+  exactly per E.7 (+ outbox, processed_events in migration 0001). Chassis `AppError` gained `details=` (rendered
+  as `error.details`).
+- DECISIONS (plan was silent/ambiguous):
+  - "Application limit" = per-CANDIDATE cap on ACTIVE applications (SUBMITTED/SCREENING/IN_PROGRESS), global
+    setting `max_active_applications` (default 10) enforced with the `application_quotas` row lock. The job's own
+    `application_limit` is stored in the replica but NOT enforced (plan exercise: "global default -> per-job").
+  - `candidate_name` + eligibility data come from ONE synchronous call to Candidate (`GET /candidates/me` with the
+    user's own Authorization header forwarded; app/repositories/candidate_api.py, 3 s timeout, Candidate down -> 503,
+    no profile -> 422 PROFILE_INCOMPLETE). Applying also requires a full name and an active resume.
+  - Recruiter board keeps the plan path `GET /jobs/{job_id}/applications`: APISIX route `job-applications`
+    (`uri: /api/jobs/*` + `vars` regex `^/api/jobs/[^/]+/applications$`, priority 10, authenticated) sends it to
+    Application, not Job. Board uses limit/offset (bounded per job); "my applications" uses keyset cursors.
+  - Lifecycle: SUBMITTED (current_stage "SUBMITTED") -> SCREENING (Phase 10 workflow) -> IN_PROGRESS (recruiter
+    PATCH stage to any of the job's stages, forward or back) -> HIRED/REJECTED (decision) | WITHDRAWN (candidate) |
+    CLOSED (Phase 10.5). Recruiter edits need `version` (409 VERSION_CONFLICT); all changes are conditional UPDATEs
+    `WHERE status IN ACTIVE` so the quota is released exactly once (decision vs withdraw race tested).
+  - Visibility: applications are private; anyone but the applicant and the job owner (job_replica.recruiter_id)
+    gets 404. Notes are recruiter-only (candidate sees `notes: null`). Audit entries for STAGE_CHANGED, NOTE_ADDED
+    (note id only), DECISION_MADE. Withdraw emits NO event yet (TODO; not in the catalog).
+- Apply flow (app/services/applications.py `apply` -> `submit`): Idempotency-Key header REQUIRED; Redis
+  `idem:{user_id}:{key}` (app/services/idempotency.py): SET NX pending marker (60 s TTL) -> 409
+  IDEMPOTENCY_IN_PROGRESS for a parallel duplicate; done -> stored 202 body replayed (24 h); same key + other
+  job_id -> 422 IDEMPOTENCY_KEY_REUSED; failures release the key. Then job open (replica READY, before deadline)
+  -> Candidate facts -> eligibility (min_experience_years) -> one transaction: quota row INSERT ON CONFLICT DO
+  NOTHING + SELECT FOR UPDATE, check, insert application, history, quota+1, ApplicationSubmitted outbox -> commit;
+  uq_applications_candidate_job -> 409 ALREADY_APPLIED. Verified: without FOR UPDATE, 15 of 20 applies passed a
+  limit of 3.
+- Job replica consumer (group `application`, topic jobs.lifecycle, app/events/handlers.py): JobUpdated/JobReady
+  upsert with `WHERE source_version < EXCLUDED.source_version`; JobClosed updates status only for a known job with
+  a newer version. TODO(Phase 10.5): close open applications on JobClosed.
+- Events e2e (`make test-events`, 7 tests) simulates JobReady by producing it with the registered schema
+  (`produce_event` helper, imports the stdlib-only event_catalog via sys.path). Dev DB note: a live race check left
+  10 test applications whose stage-history rows were deleted by a cleanup slip (test data only).

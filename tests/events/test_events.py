@@ -158,3 +158,75 @@ def test_job_updated_and_closed_reach_kafka_in_order():
     assert events[0]["payload"]["title"] == "Senior Backend Engineer"
     assert events[0]["payload"]["recruiter_id"] == recruiter_id
     assert events[0]["payload"]["version"] < events[1]["payload"]["version"]
+
+
+# ---------- Phase 8: job replica + applying end to end ----------
+
+
+def produce_event(event_type: str, key: str, payload: dict) -> None:
+    """Publish like a service would (envelope + registered schema). Used to simulate JobReady, which
+    only the Phase 9 workflow produces."""
+    import sys
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    from confluent_kafka.schema_registry import topic_record_subject_name_strategy
+    from confluent_kafka.schema_registry.json_schema import JSONSerializer
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "libs" / "smarthire_common"))
+    from smarthire_common.event_catalog import schema_str, topic_for  # stdlib-only module
+
+    envelope = {"event_id": str(uuid.uuid4()), "event_type": event_type, "schema_version": 1,
+                "occurred_at": datetime.now(UTC).isoformat(), "producer": "test", "trace_context": {}, "payload": payload}
+    serializer = JSONSerializer(schema_str(event_type), REGISTRY, conf={
+        "auto.register.schemas": False, "subject.name.strategy": topic_record_subject_name_strategy})
+    topic = topic_for(event_type)
+    producer = Producer(KAFKA)
+    producer.produce(topic, key=key, value=serializer(envelope, SerializationContext(topic, MessageField.VALUE)))
+    producer.flush(10)
+
+
+def test_candidate_applies_to_a_job_known_only_through_events():
+    recruiter_id, recruiter_token = register("RECRUITER")
+    rec = {"Authorization": f"Bearer {recruiter_token}"}
+    body = {"title": "Data Engineer", "description": "Pipelines", "employment_type": "FULL_TIME",
+            "stages": ["Screening", "Interview"], "eligibility_rules": {"min_experience_years": 2}}
+    job = httpx.post(f"{GATEWAY}/jobs", json=body, headers=rec).json()
+    httpx.put(f"{GATEWAY}/jobs/{job['id']}", json={**body, "version": 1}, headers=rec)  # v2 -> JobUpdated
+    httpx.post(f"{GATEWAY}/jobs/{job['id']}/publish", headers=rec)  # v3, PROCESSING
+    # Phase 9's workflow would now emit JobReady; simulate it (Job's own DB is set to READY too)
+    sql(f"UPDATE job.jobs SET status = 'READY' WHERE id = '{job['id']}'")
+    produce_event("JobReady", job["id"], {
+        "job_id": job["id"], "recruiter_id": recruiter_id, "title": "Data Engineer", "status": "READY",
+        "stages": ["Screening", "Interview"], "eligibility_rules": {"min_experience_years": 2},
+        "application_limit": None, "deadline": None, "version": 3})
+    wait_for(lambda: sql(f"SELECT status FROM application.job_replica WHERE job_id = '{job['id']}'") == "READY",
+             what="the replica to become READY")
+
+    # A candidate with a complete profile applies through the gateway
+    candidate_id, token = register()
+    auth = {"Authorization": f"Bearer {token}"}
+    wait_for(lambda: httpx.get(f"{GATEWAY}/candidates/me", headers=auth).status_code == 200, what="the profile")
+    httpx.put(f"{GATEWAY}/candidates/me", json={"full_name": "Jane Doe", "experience_years": 3}, headers=auth)
+    httpx.post(f"{GATEWAY}/candidates/me/resumes", files={"file": ("cv.pdf", b"%PDF-1.4\n%%EOF\n")}, headers=auth)
+    key = {"Idempotency-Key": str(uuid.uuid4())}
+    r = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]}, headers={**auth, **key})
+    assert r.status_code == 202, r.text
+    again = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]}, headers={**auth, **key})
+    assert again.json() == r.json()  # same key: the same answer, not a second application
+    application = r.json()
+
+    # The recruiter sees it on the board; ApplicationSubmitted reaches Kafka
+    board = httpx.get(f"{GATEWAY}/jobs/{job['id']}/applications", headers=rec).json()["items"]
+    assert [(a["id"], a["candidate_name"]) for a in board] == [(application["id"], "Jane Doe")]
+    [msg] = read_messages("applications.lifecycle", application["id"])
+    assert decode(msg)["payload"]["candidate_id"] == candidate_id
+
+    # The recruiter closes the job: JobClosed (v4) reaches the replica, and nobody can apply anymore
+    assert httpx.post(f"{GATEWAY}/jobs/{job['id']}/close", headers=rec).status_code == 200
+    wait_for(lambda: sql(f"SELECT status FROM application.job_replica WHERE job_id = '{job['id']}'") == "CLOSED",
+             what="the replica to close")
+    _, other_token = register()
+    other = {"Authorization": f"Bearer {other_token}", "Idempotency-Key": str(uuid.uuid4())}
+    late = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]}, headers=other)
+    assert late.status_code == 422 and late.json()["error"]["code"] == "JOB_NOT_OPEN"

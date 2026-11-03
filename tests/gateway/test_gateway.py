@@ -77,7 +77,7 @@ def test_unknown_path_is_json_404():
 
 def test_service_not_deployed_is_json_503():
     _, token = new_user()  # authenticated route: the token is checked before the upstream is tried
-    r = httpx.get(f"{GATEWAY}/api/applications", headers=bearer(token))  # no application service yet
+    r = httpx.get(f"{GATEWAY}/api/analytics", headers=bearer(token))  # no analytics service yet
     assert r.status_code == 503
     assert r.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
 
@@ -103,6 +103,15 @@ def test_oversized_upload_is_stopped_at_the_gateway():
     big = b"%PDF-" + b"0" * (7 * 1024 * 1024)  # over the route's 6 MB body limit
     r = httpx.post(f"{GATEWAY}/api/candidates/me/resumes", files={"file": ("cv.pdf", big)}, headers=bearer(token))
     assert r.status_code == 413 and r.json()["error"]["code"] == "PAYLOAD_TOO_LARGE"
+
+
+def test_recruiter_board_is_routed_to_application_not_job():
+    _, token = new_user("RECRUITER")
+    # Unknown job: Application answers with ITS error code (Job would say JOB_NOT_FOUND)
+    r = httpx.get(f"{GATEWAY}/api/jobs/{uuid.uuid4()}/applications", headers=bearer(token))
+    assert r.status_code == 404 and r.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
+    assert httpx.get(f"{GATEWAY}/api/jobs/{uuid.uuid4()}/applications").status_code == 401  # authenticated route
+    assert httpx.get(f"{GATEWAY}/api/jobs").status_code == 200  # the rest of /api/jobs still goes to Job
 
 
 def test_public_routes_need_no_token():
