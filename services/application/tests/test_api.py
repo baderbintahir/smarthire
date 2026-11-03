@@ -75,8 +75,8 @@ def test_apply_creates_application_history_quota_and_event(client, candidate, re
     assert db(database_url, "SELECT active_count FROM application_quotas")[0]["active_count"] == 1
     [event] = db(database_url, "SELECT message_key, payload FROM outbox")
     assert event["message_key"] == body["id"] and event["payload"]["event_type"] == "ApplicationSubmitted"
-    assert event["payload"]["payload"] == {"application_id": body["id"], "job_id": job_id,
-                                           "candidate_id": str(user_id), "recruiter_id": str(recruiter[0])}
+    assert event["payload"]["payload"] == {"application_id": body["id"], "job_id": job_id, "candidate_id": str(user_id),
+                                           "recruiter_id": str(recruiter[0]), "job_title": "Backend Engineer"}
 
 
 def test_same_idempotency_key_returns_the_same_response(client, candidate, add_job, candidates, database_url):

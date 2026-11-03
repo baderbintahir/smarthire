@@ -11,7 +11,7 @@ from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
 
-from app.api import auth, jwks, users
+from app.api import auth, internal, jwks, users
 from app.config import Settings
 from app.domain.tokens import load_signing_key
 
@@ -54,4 +54,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(jwks.router)
     app.include_router(auth.router)
     app.include_router(users.router)
+    app.include_router(internal.router)
     return app

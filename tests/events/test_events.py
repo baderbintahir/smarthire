@@ -283,3 +283,37 @@ def test_application_is_scored_and_moved_to_screening():
     assert decode(read_messages("scoring.results", application["id"])[0])["event_type"] == "CandidateScored"
     history = httpx.get(f"{GATEWAY}/applications/{application['id']}", headers=auth).json()["history"]
     assert [h["to_stage"] for h in history] == ["SUBMITTED", "SCREENING"]
+
+
+# ---------- Phase 11: notifications ----------
+
+MAILPIT = "http://localhost:8025/api/v1"
+
+
+def emails_to(user_id: str) -> list[str]:
+    """Subjects of the emails Mailpit caught for this user (address looked up in Identity's DB)."""
+    email = sql(f"SELECT email FROM identity.users WHERE id = '{user_id}'")
+    found = httpx.get(f"{MAILPIT}/search", params={"query": f'to:"{email}"'}).json()["messages"]
+    return sorted(m["Subject"] for m in found)
+
+
+def test_hiring_flow_sends_emails_once():
+    recruiter_id, recruiter_token = register("RECRUITER")
+    job = published_job(recruiter_token, title="Data Engineer")
+    wait_for(lambda: emails_to(recruiter_id) == ['Your job "Data Engineer" is live'], timeout=30, what="the JOB_READY email")
+    wait_for(lambda: sql(f"SELECT status FROM application.job_replica WHERE job_id = '{job['id']}'") == "READY",
+             what="the replica")
+
+    candidate_id, auth = candidate_with_parsed_resume()
+    r = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]}, headers={**auth, "Idempotency-Key": str(uuid.uuid4())})
+    assert r.status_code == 202, r.text
+    expected = ["We received your application for Data Engineer", "Your application for Data Engineer: SCREENING"]
+    wait_for(lambda: emails_to(candidate_id) == expected, timeout=60, what="the candidate's two emails")
+
+    # Replaying ApplicationSubmitted (the same bytes, as Kafka might) sends nothing new
+    [msg] = read_messages("applications.lifecycle", r.json()["id"], expected=1)
+    producer = Producer(KAFKA)
+    producer.produce("applications.lifecycle", key=msg.key(), value=msg.value())
+    producer.flush(10)
+    time.sleep(5)
+    assert emails_to(candidate_id) == expected

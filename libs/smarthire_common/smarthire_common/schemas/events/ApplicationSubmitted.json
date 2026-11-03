@@ -24,6 +24,10 @@
     "recruiter_id": {
       "type": "string",
       "format": "uuid"
+    },
+    "job_title": {
+      "type": "string",
+      "description": "added in v2 (optional): for notifications"
     }
   },
   "examples": [
@@ -31,7 +35,8 @@
       "application_id": "01a1b2c3-0000-7000-8000-000000000004",
       "job_id": "01a1b2c3-0000-7000-8000-000000000001",
       "candidate_id": "01a1b2c3-0000-7000-8000-000000000003",
-      "recruiter_id": "01a1b2c3-0000-7000-8000-000000000002"
+      "recruiter_id": "01a1b2c3-0000-7000-8000-000000000002",
+      "job_title": "Backend Engineer"
     }
   ]
 }

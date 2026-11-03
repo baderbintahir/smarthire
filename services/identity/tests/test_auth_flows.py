@@ -336,3 +336,11 @@ def test_suspend_rules(client, settings):
     assert client.post(f"/users/{admin_id}/suspend", headers=bearer(admin_token)).status_code == 409  # not yourself
     unknown = "01a1392c-0000-7000-8000-000000000000"
     assert client.post(f"/users/{unknown}/suspend", headers=bearer(admin_token)).status_code == 404
+
+
+def test_internal_contact_for_other_services(client):
+    user_id = register(client, "ana@example.com").json()["id"]
+    r = client.get(f"/internal/users/{user_id}/contact")
+    assert r.status_code == 200 and r.json() == {"user_id": user_id, "email": "ana@example.com",
+                                                 "role": "CANDIDATE", "status": "ACTIVE"}
+    assert client.get("/internal/users/01a1b2c3-0000-7000-8000-000000000009/contact").status_code == 404

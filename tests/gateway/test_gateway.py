@@ -114,6 +114,13 @@ def test_recruiter_board_is_routed_to_application_not_job():
     assert httpx.get(f"{GATEWAY}/api/jobs").status_code == 200  # the rest of /api/jobs still goes to Job
 
 
+def test_internal_endpoints_are_blocked_at_the_gateway():
+    _, token = new_user()
+    me = httpx.get(f"{ID}/users/me", headers=bearer(token)).json()["id"]
+    r = httpx.get(f"{ID}/internal/users/{me}/contact", headers=bearer(token))  # even for a logged-in user
+    assert r.status_code == 404 and r.json()["error"]["code"] == "NOT_FOUND"
+
+
 def test_public_routes_need_no_token():
     assert httpx.get(f"{ID}/.well-known/jwks.json").status_code == 200
     assert httpx.get(f"{ID}/.well-known/openid-configuration").status_code == 200

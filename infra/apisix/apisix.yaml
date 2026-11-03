@@ -112,6 +112,15 @@ routes:
         rejected_code: 429
         allow_degradation: true                 # Redis down: skip counting, don't fail requests
 
+  - id: block-internal                         # service-to-service endpoints are never public:
+    uris: [/api/identity/internal, /api/identity/internal/*]   # Identity's prefix is forwarded as-is,
+    priority: 100                               # so without this, any user could read /internal/*
+    plugins:
+      mocking:
+        response_status: 404
+        content_type: application/json
+        response_example: '{"error":{"code":"NOT_FOUND","message":"Not found"}}'
+
   - id: identity-public
     uris:
       - /api/identity/auth/register

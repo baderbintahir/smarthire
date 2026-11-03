@@ -242,6 +242,48 @@ services:
       timeout: 3s
       retries: 5
 
+  notification:                                    # consumes events, queues emails (no public API)
+    build:
+      context: .
+      dockerfile: services/notification/Dockerfile
+    environment: &notification-env
+      SERVICE_NAME: notification
+      PORT: "8007"
+      DATABASE_URL: postgresql+asyncpg://notification_user:${NOTIFICATION_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DB_SCHEMA: notification
+      IDENTITY_URL: http://identity:8001           # internal API: recipients' addresses
+      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+    ports:
+      - "127.0.0.1:8007:8007"                      # health only
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:                                   # slim image has no curl, so use python
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8007/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  notification-worker:                             # Celery worker + beat (sweeper): sends the emails
+    build:
+      context: .
+      dockerfile: services/notification/Dockerfile # same image, different command
+    command: ["celery", "-A", "app.tasks.celery_app", "worker", "-B", "-Q", "emails", "--concurrency", "2", "--loglevel", "INFO"]
+    environment: *notification-env                 # the same settings as the consumer above
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  mailpit:
+    image: axllent/mailpit:v1.31.4                 # catches every email; nothing leaves your machine
+    ports:
+      - "127.0.0.1:1025:1025"                      # SMTP
+      - "127.0.0.1:8025:8025"                      # web UI + API: http://localhost:8025
+
   # ------------------------------------------------------------ workflows + documents (Phase 9)
   temporal:
     # Temporal's dev server (temporal CLI): server + Web UI in one process, state in a SQLite file.

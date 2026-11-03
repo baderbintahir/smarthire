@@ -57,7 +57,8 @@ async def record_score_and_advance(application_id: str, result: dict | None) -> 
                                    changed_by=SYSTEM_ACTOR, reason="scored" if result else "score pending (manual)")
             event = new_event("ApplicationStageChanged", producer="application", payload={
                 "application_id": application_id, "job_id": str(application.job_id),
-                "candidate_id": str(application.candidate_id), "from_stage": from_stage, "to_stage": SCREENING})
+                "candidate_id": str(application.candidate_id), "job_title": job.title,
+                "from_stage": from_stage, "to_stage": SCREENING})
             await add_outbox_event(session, event, key=application_id)
         return SCREENING if advance else "SCORE_ONLY"
 

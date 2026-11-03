@@ -28,12 +28,13 @@ def _job_facts(job: JobReplica | None) -> rules.JobFacts | None:
                           stages=job.stages)
 
 
-async def _publish(session: AsyncSession, event_type: str, application: Application, payload: dict) -> None:
+async def _publish(session: AsyncSession, event_type: str, application: Application, job: JobReplica,
+                   payload: dict) -> None:
     """Queue an event about this application in the current transaction (key = application id:
-    one application's events stay in order)."""
+    one application's events stay in order). job_title (optional, schema v2) is for notifications."""
     event = new_event(event_type, producer="application", payload={
         "application_id": str(application.id), "job_id": str(application.job_id),
-        "candidate_id": str(application.candidate_id), **payload,
+        "candidate_id": str(application.candidate_id), "job_title": job.title, **payload,
     })
     await add_outbox_event(session, event, key=str(application.id))
 
@@ -65,7 +66,7 @@ async def submit(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID, *,
                                changed_by=user.user_id)
         await repo.change_quota(session, user.user_id, +1)
         # Starts the application workflow (Phase 10); Notification and Analytics react too
-        await _publish(session, "ApplicationSubmitted", application, {"recruiter_id": str(job.recruiter_id)})
+        await _publish(session, "ApplicationSubmitted", application, job, {"recruiter_id": str(job.recruiter_id)})
         await session.commit()
     except IntegrityError as exc:
         # 6. uq_applications_candidate_job: this candidate already applied (maybe a moment ago, in
@@ -145,7 +146,7 @@ async def change_stage(session: AsyncSession, user: CurrentUser, application_id:
                            reason=reason)
     await repo.audit(session, actor_id=user.user_id, action="STAGE_CHANGED", entity_id=application.id,
                      before={"stage": from_stage}, after={"stage": to_stage})
-    await _publish(session, "ApplicationStageChanged", application, {"from_stage": from_stage, "to_stage": to_stage})
+    await _publish(session, "ApplicationStageChanged", application, job, {"from_stage": from_stage, "to_stage": to_stage})
     await session.commit()
     await session.refresh(application)
     return application, job
@@ -164,7 +165,7 @@ async def decide(session: AsyncSession, user: CurrentUser, application_id: uuid.
     await repo.change_quota(session, application.candidate_id, -1)  # no longer open
     await repo.audit(session, actor_id=user.user_id, action="DECISION_MADE", entity_id=application.id,
                      before=before, after={"status": decision})
-    await _publish(session, "ApplicationDecisionMade", application, {"decision": decision})
+    await _publish(session, "ApplicationDecisionMade", application, job, {"decision": decision})
     await session.commit()
     await session.refresh(application)
     return application, job

@@ -29,6 +29,10 @@
     "to_stage": {
       "type": "string",
       "minLength": 1
+    },
+    "job_title": {
+      "type": "string",
+      "description": "added in v2 (optional): for notifications"
     }
   },
   "examples": [
@@ -37,7 +41,8 @@
       "job_id": "01a1b2c3-0000-7000-8000-000000000001",
       "candidate_id": "01a1b2c3-0000-7000-8000-000000000003",
       "from_stage": "SUBMITTED",
-      "to_stage": "SCREENING"
+      "to_stage": "SCREENING",
+      "job_title": "Backend Engineer"
     }
   ]
 }

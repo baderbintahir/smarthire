@@ -93,7 +93,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 8 Application service: [x] 8.1 models · [x] 8.2 job replica consumer · [x] 8.3 submit (idempotency, quota lock) · [x] 8.4 views · [x] 8.5 stage/notes/decision/withdraw (67 tests; gateway 13, events e2e 7; live race: 20 applies, quota 10 -> exactly 10)
 - [x] Phase 9 Temporal + job publishing saga: [x] 9.1 temporal + mongo · [x] 9.2 hello world · [x] 9.3 job_enrichment · [x] 9.4 JobPublishingWorkflow · [x] 9.5 reliable start (job 89, enrichment 12, chassis 86, events e2e 8; break-it verified)
 - [x] Phase 10 Resume parsing, scoring, application workflow: [x] 10.1 rabbitmq + celery · [x] 10.2 parse_resume · [x] 10.3 scoring · [x] 10.4 ApplicationWorkflow · [x] 10.5 job closure (candidate 86, application 78, scoring 13, events e2e 10; break-its verified)
-- [ ] Phase 11 Notification
+- [x] Phase 11 Notification: [x] 11.1 mailpit + tables · [x] 11.2 consumers -> tasks · [x] 11.3 sending, retries, circuit breaker (notification 17, identity 38, gateway 14, events e2e 11; break-it verified)
 - [ ] Phase 12 Analytics
 - [ ] Phase 12B BFF (API composition)
 - [ ] Phase 13 Observability
@@ -102,7 +102,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** Phase 11 (Notification) if not done, then Phase 12 (Analytics).
+**Next step:** Phase 12 (Analytics).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -515,3 +515,33 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - e2e: tests/events/resume_files.py (copy of candidate's PDF/DOCX generators). Live break-its verified: worker
   stopped -> resume stays UPLOADED, restarted -> PARSED in ~4 s; Scoring stopped -> application stays SUBMITTED,
   restarted -> SCREENING with score in ~4 s.
+- Phase 11 was built in one pass at the user's request (separate commit from Phase 10).
+- Recipient addresses (the plan's open question): Notification LOOKS THEM UP from Identity's new internal endpoint
+  `GET /internal/users/{id}/contact` ({user_id, email, role, status}) when it handles an event; events keep
+  carrying IDs only (no PII in Kafka). Identity's internal path is BLOCKED at the gateway: APISIX route
+  `block-internal` (uris /api/identity/internal[/*], priority 100, mocking JSON 404) because Identity's whole prefix
+  is forwarded; gateway test covers it. Other services' /internal/* aren't reachable via their /api/<x>/* rewrites.
+- Schema evolution done for real: optional `job_title` added to ApplicationSubmitted, ApplicationStageChanged,
+  ApplicationDecisionMade (schema v2 registered; BACKWARD accepted). Application fills it (from job_replica.title).
+  Notification falls back to "the job" for v1 events.
+- Notification service (port 8007 on 127.0.0.1, health only, no public API, no gateway route): tables per E.8 +
+  processed_events; the 5 templates (APPLICATION_RECEIVED, STAGE_CHANGED, DECISION_MADE, JOB_READY,
+  JOB_PUBLISH_FAILED) are seeded by migration 0001. Consumer group `notification` on applications.lifecycle +
+  jobs.lifecycle (app/events/handlers.py): route event -> (template, recipient user id, variables)
+  (app/domain/routing.py) -> Identity contact (down -> RetryLater; missing/suspended user -> no email) -> INSERT
+  notification_log with key "<event_id>:<template>" ON CONFLICT DO NOTHING -> commit -> send_task("send_email")
+  (failure only logged: the sweeper catches it).
+- Worker container `notification-worker`: `celery -A app.tasks.celery_app worker -B -Q emails` (beat embedded:
+  run only ONE). Tasks (app/tasks/email.py): `send_email` (retry on SendLater, countdown 5 s doubling to 5 min,
+  max_retries 20) and `requeue_stale` every 60 s (QUEUED rows older than 2 min re-enqueued). Sending
+  (app/services/sending.py): SELECT ... FOR UPDATE SKIP LOCKED on the log row (parallel duplicate task -> "busy"),
+  only QUEUED is sent, SENT recorded in the same transaction; pybreaker CircuitBreaker(fail_max=3,
+  reset_timeout=30) per worker process around smtplib; SMTP error -> attempts+1, last_error (committed), retry;
+  after MAX_ATTEMPTS=6 real attempts -> FAILED. Templates rendered with a forgiving format_map; subjects stripped
+  of CR/LF (header injection). Residual risk: SMTP accepted but the DB commit failed -> could resend (rare).
+- Mailpit `axllent/mailpit:v1.31.4`: SMTP 127.0.0.1:1025, UI/API http://localhost:8025. Keeps mail in memory:
+  a restart empties it. The new `notification` consumer group replayed ALL past events on first start, so Mailpit
+  got a burst of emails for old test users (expected).
+- Live break-it verified: Mailpit stopped -> recruiter decision still 200 in 0.03 s, email row QUEUED with
+  attempts=1 and the error; Mailpit restarted -> SENT (attempts=3). e2e test: JOB_READY to the recruiter, two
+  candidate emails, replaying ApplicationSubmitted sends nothing new.
