@@ -239,3 +239,16 @@ def test_internal_resume_facts(client, with_profile):
     facts = client.get(f"/internal/candidates/{user_id}/resume").json()
     assert facts["experience_years"] == 3.5  # from the profile (PROFILE fixture)
     assert facts["resume"]["resume_id"] == resume["id"] and facts["resume"]["status"] == "UPLOADED"
+
+
+def test_resume_download_link(client, with_profile, tokens):
+    import httpx
+
+    user_id, headers = with_profile
+    assert client.get(f"/candidates/{user_id}/resume/link", headers=headers).status_code == 404  # no resume yet
+    upload(client, headers, name="Jane CV.pdf")
+    link = client.get(f"/candidates/{user_id}/resume/link", headers=tokens.headers(role="RECRUITER")).json()
+    assert link["expires_in"] == 300 and "X-Amz-Signature" in link["url"]
+    downloaded = httpx.get(link["url"])  # the presigned URL works without any login
+    assert downloaded.status_code == 200 and downloaded.content.startswith(b"%PDF-")
+    assert client.get(f"/candidates/{user_id}/resume/link", headers=tokens.headers(role="CANDIDATE")).status_code == 403

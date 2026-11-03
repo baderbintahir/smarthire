@@ -33,6 +33,7 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
             settings.s3_secret_key,
             bucket=settings.resumes_bucket,
             secure=settings.s3_secure,
+            public_endpoint=settings.s3_public_endpoint,
         )
         # Verify tokens ourselves too (rule 7), with Identity's public keys from its JWKS endpoint
         init_auth(

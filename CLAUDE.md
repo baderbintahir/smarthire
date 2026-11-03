@@ -95,14 +95,14 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 10 Resume parsing, scoring, application workflow: [x] 10.1 rabbitmq + celery · [x] 10.2 parse_resume · [x] 10.3 scoring · [x] 10.4 ApplicationWorkflow · [x] 10.5 job closure (candidate 86, application 78, scoring 13, events e2e 10; break-its verified)
 - [x] Phase 11 Notification: [x] 11.1 mailpit + tables · [x] 11.2 consumers -> tasks · [x] 11.3 sending, retries, circuit breaker (notification 17, identity 38, gateway 14, events e2e 11; break-it verified)
 - [x] Phase 12 Analytics: [x] 12.1 projections · [x] 12.2 consumers · [x] 12.3 metrics API · [x] 12.4 rebuild (analytics 8, events e2e 13: metrics follow actions, rebuild identical)
-- [ ] Phase 12B BFF (API composition)
+- [x] Phase 12B BFF (API composition): [x] 12B.1 scaffold + gateway route · [x] 12B.2 composed application view + recruiter dashboard (bff 11, events e2e 14)
 - [ ] Phase 13 Observability
 - [ ] Phase 14 Reliability + load tests (tag v0.1-core)
 - [ ] Phase 15 Semantic index
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** Phase 12B (BFF) if not done, then Phase 13 (Observability).
+**Next step:** Phase 13 (Observability).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -575,3 +575,25 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   then) and SQL-forced job states are invisible to Analytics by design; a backfill would need synthetic events.
 - e2e changes: the DLQ test now expects one DLQ copy per consumer group on identity.users (candidate, analytics);
   `wait_for` ignores httpx errors (services restarting); "service not deployed" gateway test uses /api/assistant.
+- Phase 12B was built in one pass at the user's request (separate commit from Phase 12).
+- bff_web (port 8011 on 127.0.0.1, no DB; Redis only for the token denylist; gateway route `bff` /api/bff/* ->
+  /bff/*, authenticated). Verifies the token itself (rule 7) and FORWARDS the caller's Authorization header to
+  every service (no permissions of its own). app/clients/downstream.py: `Downstream.get` with a HARD total
+  deadline (asyncio.wait_for; httpx's timeout is per phase) of `call_timeout_seconds` (2 s) and a per-service
+  CircuitBreaker (3 failures -> open 15 s, then one trial call). 403/404 from a service = an ANSWER (passed
+  through unchanged via `Passthrough`); timeout/connection error/5xx/open breaker = Unavailable.
+- `GET /bff/applications/{id}`: Application FIRST (essential: decides access, gives candidate_id; its 403/404 is
+  returned as is; down -> 503), then IN PARALLEL (asyncio.gather) Candidate profile, Scoring `/scores/{id}`
+  (internal API, no token: only called after Application allowed the caller) and Candidate's resume link;
+  failures -> null + name in `degraded` ("candidate", "score", "resume_download"). DEVIATION: the plan says a
+  non-owner recruiter gets 403; our Application answers 404 for strangers (applications are private), which the
+  BFF passes through.
+- `GET /bff/recruiter/dashboard` (RECRUITER): Job `/jobs?mine=true&limit=20` (essential) + Analytics metrics
+  (optional: 4 headline numbers) in parallel, then a fan-out of Application `GET /jobs/{id}/applications/summary`
+  (NEW endpoint: {job_id, total, by_stage}, owner only, 404 otherwise) per job; failures -> per-job nulls +
+  "application_counts" in degraded.
+- Candidate: NEW `GET /candidates/{id}/resume/link` (same access as the profile) -> presigned MinIO GET URL valid
+  5 min for the active resume (attachment filename). Signed by a second Minio client for `s3_public_endpoint`
+  (Compose: localhost:9000) with region us-east-1 (no network call to sign). Bucket stays private.
+- e2e flakiness: the gateway suite and the events suite both log in many users; run back to back they can hit the
+  30 logins/min/IP limit (429). Wait a minute between them if a run fails at login.

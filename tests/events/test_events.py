@@ -371,3 +371,43 @@ def test_rebuild_from_events_gives_identical_numbers():
     wait_for(lambda: httpx.get("http://localhost:8008/health/ready").status_code == 200, what="analytics to restart")
     after = metrics(token)
     assert after == before
+
+
+# ---------- Phase 12B: the BFF (composed screens) ----------
+
+
+def test_bff_application_view_degrades_without_scoring():
+    _, recruiter_token = register("RECRUITER")
+    rec = {"Authorization": f"Bearer {recruiter_token}"}
+    job = published_job(recruiter_token, title="Platform Engineer")
+    wait_for(lambda: sql(f"SELECT status FROM application.job_replica WHERE job_id = '{job['id']}'") == "READY",
+             what="the replica")
+    candidate_id, auth = candidate_with_parsed_resume()
+    application = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]},
+                             headers={**auth, "Idempotency-Key": str(uuid.uuid4())}).json()
+    view = wait_for(lambda: (v := httpx.get(f"{GATEWAY}/bff/applications/{application['id']}", headers=rec).json())
+                    .get("score") and v, timeout=60, what="the composed view with a score")
+    assert view["application"]["id"] == application["id"] and view["candidate"]["id"] == candidate_id
+    assert view["degraded"] == [] and view["score"]["breakdown"]["matched_skills"]
+    download = httpx.get(view["resume_download"]["url"])  # the presigned link works, no login, for 5 minutes
+    assert download.status_code == 200 and download.content.startswith(b"%PDF-")
+    # The candidate sees the same page for their own application (Application allows it)
+    assert httpx.get(f"{GATEWAY}/bff/applications/{application['id']}", headers=auth).status_code == 200
+
+    # Another recruiter: Application refuses (404: applications are private), the BFF passes it on
+    _, other = register("RECRUITER")
+    refused = httpx.get(f"{GATEWAY}/bff/applications/{application['id']}", headers={"Authorization": f"Bearer {other}"})
+    assert refused.status_code == 404 and refused.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
+
+    # Scoring down: the page still loads, without the score
+    subprocess.run(["docker", "compose", "stop", "scoring"], check=True, capture_output=True)
+    try:
+        degraded = httpx.get(f"{GATEWAY}/bff/applications/{application['id']}", headers=rec).json()
+        assert degraded["score"] is None and degraded["degraded"] == ["score"] and degraded["candidate"] is not None
+    finally:
+        subprocess.run(["docker", "compose", "start", "scoring"], check=True, capture_output=True)
+
+    # The recruiter dashboard: their job with its counts per stage, plus headline metrics
+    dashboard = httpx.get(f"{GATEWAY}/bff/recruiter/dashboard", headers=rec).json()
+    assert [(j["id"], j["total_applications"]) for j in dashboard["jobs"]] == [(job["id"], 1)]
+    assert dashboard["metrics"]["total_applications"] >= 1 and dashboard["degraded"] == []

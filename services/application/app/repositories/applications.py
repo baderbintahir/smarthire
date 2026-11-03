@@ -116,6 +116,13 @@ async def board(session: AsyncSession, job_id: uuid.UUID, *, stage: str | None, 
     return list((await session.execute(stmt)).scalars())
 
 
+async def count_by_stage(session: AsyncSession, job_id: uuid.UUID) -> dict[str, int]:
+    """{stage: number of applications}. Served by ix_applications_job_stage_score (job_id, current_stage, ...)."""
+    stmt = (select(Application.current_stage, func.count()).where(Application.job_id == job_id)
+            .group_by(Application.current_stage).order_by(Application.current_stage))
+    return {stage: count for stage, count in (await session.execute(stmt)).all()}
+
+
 # Keyset pagination for "my applications" (same idea as Job's board): (created_at, id) < cursor
 
 

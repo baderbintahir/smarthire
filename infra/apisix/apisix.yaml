@@ -188,6 +188,13 @@ routes:
     plugins:
       proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
 
+  - id: bff                                    # Backend for Frontend (Phase 12B): composed screens
+    uris: [/api/bff, /api/bff/*]
+    upstream_id: bff_web
+    plugin_config_id: authenticated
+    plugins:
+      proxy-rewrite: { regex_uri: ["^/api/(.*)", "/$1"] }
+
   - id: assistant                                # SSE: see Step 4.5 notes in CLAUDE.md
     uris: [/api/assistant, /api/assistant/*]
     upstream_id: ai_assistant

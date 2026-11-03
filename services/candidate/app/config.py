@@ -11,6 +11,8 @@ class Settings(BaseServiceSettings):
     # --- Object storage (MinIO, S3-compatible) for resume files ---
     s3_endpoint: str = "localhost:9000"  # host:port, no scheme (minio client style); minio:9000 in Compose
     s3_secure: bool = False  # TLS off locally; on in production
+    # The address BROWSERS use for MinIO (download links are signed for this host): localhost:9000 locally
+    s3_public_endpoint: str | None = None  # None = same as s3_endpoint
     s3_access_key: str  # required: the service's own MinIO user, not the root account
     s3_secret_key: str
     resumes_bucket: str = "resumes"

@@ -11,12 +11,17 @@ import io
 from minio import Minio
 
 _client: Minio | None = None
+_signer: Minio | None = None  # signs download links for the PUBLIC address (it never connects anywhere)
 _bucket: str | None = None
 
 
-def init_storage(endpoint: str, access_key: str, secret_key: str, *, bucket: str, secure: bool) -> None:
-    global _client, _bucket
+def init_storage(endpoint: str, access_key: str, secret_key: str, *, bucket: str, secure: bool,
+                 public_endpoint: str | None = None) -> None:
+    global _client, _signer, _bucket
     _client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
+    # region given: signing is then pure computation (no "which region is this bucket in?" network call)
+    _signer = Minio(public_endpoint or endpoint, access_key=access_key, secret_key=secret_key, secure=secure,
+                    region="us-east-1")
     _bucket = bucket
 
 
@@ -47,6 +52,18 @@ async def get(key: str) -> bytes:
             response.release_conn()  # give the HTTP connection back to the pool
 
     return await asyncio.to_thread(download)
+
+
+def download_link(key: str, file_name: str, *, seconds: int = 300) -> str:
+    """A presigned URL: anyone holding it can download THIS file, for `seconds`, and nothing else.
+    The bucket stays private; access was checked by our API before handing the link out."""
+    from datetime import timedelta
+
+    if _signer is None or _bucket is None:
+        raise RuntimeError("Storage not initialised: call init_storage() at startup")
+    return _signer.presigned_get_object(
+        _bucket, key, expires=timedelta(seconds=seconds),
+        response_headers={"response-content-disposition": f'attachment; filename="{file_name}"'})
 
 
 async def delete(key: str) -> None:

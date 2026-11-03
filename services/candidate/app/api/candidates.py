@@ -62,6 +62,13 @@ async def upload_resume(
     return ResumeOut.model_validate(resume)
 
 
+@router.get("/{candidate_id}/resume/link")
+async def resume_link(
+    candidate_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)
+) -> dict:
+    return await service.resume_link(session, user, candidate_id)
+
+
 @router.get("/{candidate_id}", response_model=ProfileOut)
 async def get_candidate(
     candidate_id: uuid.UUID, user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)

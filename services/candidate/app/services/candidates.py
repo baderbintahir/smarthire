@@ -116,3 +116,17 @@ async def _delete_quietly(key: str) -> None:
         await files.delete(key)
     except Exception:
         log.warning("could not delete orphaned resume object", extra={"object_key": key})
+
+
+LINK_SECONDS = 300  # 5 minutes: enough to click it, too short to be worth sharing around
+
+
+async def resume_link(session: AsyncSession, user: CurrentUser, candidate_id: uuid.UUID) -> dict:
+    """A short-lived download link to the candidate's ACTIVE resume, for the same people who may read
+    the profile (the candidate, recruiters, admins). TODO(Phase 8 rule): recruiters of their applicants only."""
+    await get_profile_for(session, user, candidate_id)  # same access rule as the profile (403/404)
+    resume = await repo.active_resume(session, candidate_id)
+    if resume is None:
+        raise CandidateNotFoundError("This candidate has no resume")
+    return {"resume_id": str(resume.id), "file_name": resume.file_name, "expires_in": LINK_SECONDS,
+            "url": files.download_link(resume.object_key, resume.file_name, seconds=LINK_SECONDS)}

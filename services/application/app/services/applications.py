@@ -95,6 +95,13 @@ async def board(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID, *, 
     return await repo.board(session, job_id, stage=stage, limit=limit, offset=offset), job
 
 
+async def stage_summary(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID) -> dict:
+    if await jobs.owned_by(session, job_id, user.user_id) is None:
+        raise ApplicationNotFoundError()  # not your job (or unknown): 404, like the board
+    by_stage = await repo.count_by_stage(session, job_id)
+    return {"job_id": str(job_id), "total": sum(by_stage.values()), "by_stage": by_stage}
+
+
 async def _load(session: AsyncSession, application_id: uuid.UUID, user: CurrentUser) -> tuple[Application, JobReplica, str]:
     """The application and the caller's relation to it: "candidate" (applicant) or "recruiter" (job
     owner). Anyone else gets 404: applications are private, even their existence."""

@@ -294,3 +294,12 @@ def test_decision_and_withdrawal_race_releases_the_quota_once(client, candidate,
         statuses = sorted(pool.map(lambda call: call(), calls))
     assert statuses == [200, 409]
     assert db(database_url, "SELECT active_count FROM application_quotas")[0]["active_count"] == 0  # not -1
+
+
+def test_stage_summary_for_the_job_owner(client, recruiter, tokens, add_job):
+    job_id = add_job(recruiter[0])
+    apps = [apply(client, tokens.headers(role="CANDIDATE"), job_id).json() for _ in range(3)]
+    client.patch(f"/applications/{apps[0]['id']}/stage", json={"to_stage": "Interview", "version": 1}, headers=recruiter[1])
+    summary = client.get(f"/jobs/{job_id}/applications/summary", headers=recruiter[1]).json()
+    assert summary == {"job_id": job_id, "total": 3, "by_stage": {"Interview": 1, "SUBMITTED": 2}}
+    assert client.get(f"/jobs/{job_id}/applications/summary", headers=tokens.headers(role="RECRUITER")).status_code == 404

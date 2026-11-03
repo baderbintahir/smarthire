@@ -79,6 +79,13 @@ async def job_board(
     return BoardPage(items=[application_out(a, job) for a in applications])
 
 
+@router.get("/jobs/{job_id}/applications/summary")
+async def job_summary(job_id: uuid.UUID, user: CurrentUser = Depends(recruiter_only),
+                      session: AsyncSession = Depends(get_session)) -> dict:
+    """How many applications sit in each stage (the BFF's recruiter dashboard)."""
+    return await service.stage_summary(session, user, job_id)
+
+
 @router.get("/applications/{application_id}", response_model=ApplicationDetail)
 async def application_detail(
     application_id: uuid.UUID, user: CurrentUser = Depends(anyone), session: AsyncSession = Depends(get_session)
