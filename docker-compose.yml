@@ -41,6 +41,7 @@ services:
       dockerfile: services/identity/Dockerfile
     environment:
       SERVICE_NAME: identity
+      TRACING_ENABLED: "true"                     # spans to Jaeger (Phase 13)
       PORT: "8001"
       DATABASE_URL: postgresql+asyncpg://identity_user:${IDENTITY_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DB_SCHEMA: identity
@@ -73,6 +74,7 @@ services:
       dockerfile: services/job/Dockerfile
     environment:
       SERVICE_NAME: job
+      TRACING_ENABLED: "true"                     # spans to Jaeger (Phase 13)
       PORT: "8002"
       DATABASE_URL: postgresql+asyncpg://job_user:${JOB_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DB_SCHEMA: job
@@ -129,6 +131,7 @@ services:
       dockerfile: services/candidate/Dockerfile
     environment:
       SERVICE_NAME: candidate
+      TRACING_ENABLED: "true"                     # spans to Jaeger (Phase 13)
       PORT: "8004"
       DATABASE_URL: postgresql+asyncpg://candidate_user:${CANDIDATE_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DB_SCHEMA: candidate
@@ -161,6 +164,7 @@ services:
     command: ["celery", "-A", "app.tasks.celery_app", "worker", "-Q", "resumes", "--concurrency", "2", "--loglevel", "INFO"]
     environment:
       SERVICE_NAME: candidate
+      TRACING_ENABLED: "true"                     # the worker sends spans too (Phase 13)
       DATABASE_URL: postgresql+asyncpg://candidate_user:${CANDIDATE_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DB_SCHEMA: candidate
       S3_ENDPOINT: minio:9000
@@ -181,6 +185,7 @@ services:
       dockerfile: services/application/Dockerfile
     environment:
       SERVICE_NAME: application
+      TRACING_ENABLED: "true"                     # spans to Jaeger (Phase 13)
       PORT: "8005"
       DATABASE_URL: postgresql+asyncpg://application_user:${APPLICATION_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DB_SCHEMA: application
@@ -206,6 +211,7 @@ services:
       dockerfile: services/job_enrichment/Dockerfile
     environment:
       SERVICE_NAME: job_enrichment
+      TRACING_ENABLED: "true"                     # spans to Jaeger (Phase 13)
       PORT: "8003"
       MONGO_URL: mongodb://mongo:27017/?directConnection=true
       MONGO_DATABASE: enrichment
@@ -227,6 +233,7 @@ services:
       dockerfile: services/scoring/Dockerfile
     environment:
       SERVICE_NAME: scoring
+      TRACING_ENABLED: "true"                     # spans to Jaeger (Phase 13)
       PORT: "8006"
       MONGO_URL: mongodb://mongo:27017/?directConnection=true
       MONGO_DATABASE: scoring
@@ -249,6 +256,7 @@ services:
       dockerfile: services/notification/Dockerfile
     environment: &notification-env
       SERVICE_NAME: notification
+      TRACING_ENABLED: "true"                     # spans to Jaeger (Phase 13)
       PORT: "8007"
       DATABASE_URL: postgresql+asyncpg://notification_user:${NOTIFICATION_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DB_SCHEMA: notification
@@ -291,6 +299,7 @@ services:
       dockerfile: services/analytics/Dockerfile
     environment:
       SERVICE_NAME: analytics
+      TRACING_ENABLED: "true"                     # spans to Jaeger (Phase 13)
       PORT: "8008"
       DATABASE_URL: postgresql+asyncpg://analytics_user:${ANALYTICS_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DB_SCHEMA: analytics
@@ -315,6 +324,7 @@ services:
       dockerfile: services/bff_web/Dockerfile
     environment:
       SERVICE_NAME: bff_web
+      TRACING_ENABLED: "true"                     # spans to Jaeger (Phase 13)
       PORT: "8011"
       REDIS_URL: redis://redis:6379/0              # token denylist (the BFF verifies tokens too)
       FORWARDED_ALLOW_IPS: 172.30.0.10
@@ -479,8 +489,38 @@ services:
       kafka:
         condition: service_healthy
 
+  # ---------------------------------------------------------------- observability (Phase 13)
+  jaeger:
+    # Jaeger v2 all-in-one: OTLP receiver + in-memory trace store + UI. Traces are lost on restart (dev only).
+    # Pinned to 2.20.0: 2.21 removed the v1 HTTP query API that Grafana 13.2's Jaeger data source still
+    # calls (grafana/grafana-jaeger-datasource#87). Upgrade once Grafana moves to /api/v3.
+    image: jaegertracing/jaeger:2.20.0
+    ports:
+      - "127.0.0.1:16686:16686"                    # UI: http://localhost:16686
+    # OTLP :4317 (gRPC) and :4318 (HTTP) are reached by services inside the Compose network only
+
+  prometheus:
+    image: prom/prometheus:v3.13.4
+    volumes:
+      - ./infra/prometheus:/etc/prometheus:ro       # prometheus.yml (changes need a restart)
+      - promdata:/prometheus                        # metric history survives restarts
+    ports:
+      - "127.0.0.1:9090:9090"                      # UI: http://localhost:9090 (no auth: localhost only)
+
+  grafana:
+    image: grafana/grafana:13.2.5
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro   # data sources + dashboard provider
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro   # dashboards as JSON (Step 13.6)
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3001:3000"                      # http://localhost:3001, admin/admin (local dev only; host 3000 is often taken by node dev servers)
+    depends_on:
+      - prometheus
+      - jaeger
+
   gateway:
-    image: apache/apisix:3.19.0-debian               # pinned: upgrades are a deliberate change
+    image: apache/apisix:3.19.0-debian              # pinned: upgrades are a deliberate change
     volumes:
       - ./infra/apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
       - ./infra/apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro   # routes (standalone mode)
@@ -508,6 +548,8 @@ volumes:
   temporaldata:
   mongodata:
   rabbitmqdata:
+  promdata:
+  grafanadata:
 
 networks:
   default:

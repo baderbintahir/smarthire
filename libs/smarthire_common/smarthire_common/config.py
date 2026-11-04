@@ -28,6 +28,11 @@ class BaseServiceSettings(BaseSettings):
     temporal_address: str = "temporal:7233"
     temporal_namespace: str = "default"
     temporal_enabled: bool = True  # start the Temporal worker with the app; tests turn it off
+    temporal_metrics_bind: str = "0.0.0.0:9464"  # the SDK's Prometheus metrics (Phase 13; scraped inside Compose)
 
     # --- Background tasks (Phase 10); only used by services with Celery tasks ---
     celery_broker_url: str = "amqp://guest:guest@rabbitmq:5672//"
+
+    # --- Tracing (Phase 13). Off by default so tests never try to reach Jaeger; Compose turns it on ---
+    tracing_enabled: bool = False
+    otlp_endpoint: str = "http://jaeger:4318/v1/traces"  # OTLP over HTTP (no grpcio dependency)

@@ -13,8 +13,10 @@ from smarthire_common.auth import JWKSClient, KeyProvider, close_auth, init_auth
 from smarthire_common.errors import register_exception_handlers
 from smarthire_common.health import health_router, register_readiness_check
 from smarthire_common.logging import setup_logging
+from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
+from smarthire_common.telemetry import flush_tracing, setup_tracing
 
 from app.api import bff
 from app.clients.downstream import CircuitBreaker, Downstream
@@ -46,11 +48,14 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
         await http.aclose()
         await close_auth()
         await close_redis()
+        flush_tracing()  # send spans still queued for Jaeger
 
     app = FastAPI(title=settings.service_name, lifespan=lifespan)
+    setup_tracing(settings, app)  # spans for requests, SQL, Redis, outgoing HTTP (no-op unless enabled)
     app.state.settings = settings
     app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)
     app.include_router(health_router)
+    setup_metrics(app)  # GET /metrics + request count/latency
     app.include_router(bff.router)
     return app

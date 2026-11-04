@@ -220,6 +220,16 @@ routes:
         response_example: '{"error":{"code":"NOT_FOUND","message":"No service handles this path"}}'
 
 # ---------------------------------------------------------------- applied to every request
+# Plugin-wide settings. On 3.19 opentelemetry reads its collector from here (NOT config.yaml's
+# plugin_attr): without this entry it silently skips every request (a warn in the log)
+plugin_metadata:
+  - id: opentelemetry
+    resource:
+      service.name: gateway                     # the name shown in Jaeger's service list
+    collector:
+      address: jaeger:4318                      # OTLP over HTTP, like the services (path /v1/traces)
+      request_timeout: 3
+
 global_rules:
   - id: edge
     plugins:
@@ -227,5 +237,10 @@ global_rules:
         header_name: X-Request-ID               # reuse the client's id, or generate one
         include_in_response: true
       prometheus: {}                            # per-route metrics on :9091 (Phase 13)
+      # Every trace STARTS here (or joins a client's traceparent): the gateway's span is the root, and
+      # the traceparent it forwards makes each service's span its child. always_on: keep every trace (dev)
+      opentelemetry:
+        sampler:
+          name: always_on
       smarthire-retry-after: {}
 #END

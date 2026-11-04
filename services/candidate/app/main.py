@@ -8,9 +8,11 @@ from smarthire_common.errors import register_exception_handlers
 from smarthire_common.health import db_ping_check, health_router, register_readiness_check
 from smarthire_common.kafka import start_consumer
 from smarthire_common.logging import setup_logging
+from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
+from smarthire_common.telemetry import flush_tracing, setup_tracing
 
 from app.api import candidates, internal
 from app.config import Settings
@@ -59,12 +61,15 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
         await close_auth()
         await close_redis()
         await close_db()
+        flush_tracing()  # send spans still queued for Jaeger
 
     app = FastAPI(title=settings.service_name, lifespan=lifespan)
+    setup_tracing(settings, app)  # spans for requests, SQL, Redis, outgoing HTTP (no-op unless enabled)
     app.state.settings = settings  # routes read limits from here (e.g. max_resume_bytes)
     app.add_middleware(RequestIdMiddleware)
     register_exception_handlers(app)
     app.include_router(health_router)
+    setup_metrics(app)  # GET /metrics + request count/latency
     app.include_router(candidates.router)
     app.include_router(internal.router)
     return app

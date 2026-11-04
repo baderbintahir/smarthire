@@ -66,12 +66,14 @@ class ApplicationWorkflow:
             return self.stop_reason
         stopped.cancel()
 
+        failure = None
         try:
             result = scoring.result()
         except ActivityError as err:  # gave up (deadline) or impossible (no resume): a human scores it
             workflow.logger.warning("application %s not scored: %s", application_id, err.cause)
-            result = None
+            result, failure = None, f"scoring gave up: {err.cause}"
 
-        await workflow.execute_activity("record_score_and_advance", args=[application_id, result],
+        # `failure` becomes a SystemFailure event (Step 13.5), written with the result in one transaction
+        await workflow.execute_activity("record_score_and_advance", args=[application_id, result, failure],
                                         task_queue=APPLICATION_TQ, **RECORD)
         return "SCREENING" if result is not None else "PENDING_MANUAL"

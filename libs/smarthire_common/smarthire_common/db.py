@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from smarthire_common.telemetry import trace_engine
+
 # Module-level on purpose: one engine (= one connection pool) per service process.
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
@@ -21,6 +23,7 @@ def init_db(database_url: str, **engine_kwargs) -> AsyncEngine:
     # cause one failed request per stale connection
     engine_kwargs.setdefault("pool_pre_ping", True)
     _engine = create_async_engine(database_url, **engine_kwargs)
+    trace_engine(_engine)  # a span per SQL statement (no-op unless tracing is on)
     # expire_on_commit=False: objects stay readable after commit (lazy reloads
     # would need another await, which async code can't do implicitly)
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)

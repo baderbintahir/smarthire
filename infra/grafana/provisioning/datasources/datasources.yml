@@ -1,0 +1,17 @@
+# Created by Grafana at startup ("provisioning"), so nothing is clicked by hand and a fresh
+# volume gets the same setup. Dashboards come in Step 13.6.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus                       # fixed uid: dashboards (13.6) refer to it
+    type: prometheus
+    access: proxy                         # Grafana's server calls Prometheus (not the browser)
+    url: http://prometheus:9090
+    isDefault: true
+
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686

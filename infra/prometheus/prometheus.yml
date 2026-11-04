@@ -1,0 +1,48 @@
+# Prometheus PULLS metrics: every scrape_interval it GETs each target's /metrics.
+# Targets are Compose service names (Docker's DNS), so a recreated container is found again.
+# Config changes need `docker compose restart prometheus`.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - alerts.yml                             # alert rules (Step 13.8), same directory
+
+scrape_configs:
+  - job_name: services                     # every FastAPI service: GET /metrics (chassis setup_metrics)
+    static_configs:
+      - targets:
+          - identity:8001
+          - job:8002
+          - job_enrichment:8003
+          - candidate:8004
+          - application:8005
+          - scoring:8006
+          - notification:8007
+          - analytics:8008
+          - bff_web:8011
+    relabel_configs: &service_label        # "identity:8001" -> service="identity" (dashboards group by it)
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: service
+
+  - job_name: temporal-workers             # the Temporal SDK's own metrics (chassis temporal.py, :9464)
+    static_configs:
+      - targets: [job:9464, job_enrichment:9464, application:9464, scoring:9464]
+    relabel_configs: *service_label
+
+  - job_name: rabbitmq                     # Celery queue depth: messages waiting per queue
+    metrics_path: /metrics/detailed
+    params:
+      family: [queue_coarse_metrics]       # per-queue numbers (the default endpoint only has totals)
+    static_configs:
+      - targets: [rabbitmq:15692]
+
+  - job_name: gateway                      # APISIX prometheus plugin (export_addr in infra/apisix/config.yaml)
+    metrics_path: /apisix/prometheus/metrics
+    static_configs:
+      - targets: [gateway:9091]
+
+  - job_name: prometheus                   # Prometheus' own health
+    static_configs:
+      - targets: [localhost:9090]

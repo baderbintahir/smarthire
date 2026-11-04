@@ -9,6 +9,7 @@ import logging
 
 from smarthire_common.events import EventEnvelope
 from smarthire_common.kafka import RetryLater
+from smarthire_common.metrics import WORKFLOWS_STARTED
 from smarthire_common.temporal import connect
 from sqlalchemy.ext.asyncio import AsyncSession
 from temporalio.common import WorkflowIDReusePolicy
@@ -36,6 +37,7 @@ def build_handlers(settings) -> dict:
                 "JobPublishingWorkflow", args=[job_id, version], id=workflow_id(job_id, version), task_queue=JOB_TQ,
                 id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,  # never run the same version twice
             )
+            WORKFLOWS_STARTED.labels("JobPublishingWorkflow").inc()
             log.info("started %s", workflow_id(job_id, version))
         except WorkflowAlreadyStartedError:
             log.info("%s already started: ignoring the duplicate request", workflow_id(job_id, version))

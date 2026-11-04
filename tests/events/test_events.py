@@ -4,6 +4,7 @@ Real Identity/Job/Candidate, real outbox relays, real Kafka + Schema Registry, r
 prove the wiring (topics, keys, schemas, consumer group); the logic itself is unit-tested in
 libs/smarthire_common/tests and in each service."""
 
+import json
 import subprocess
 import time
 import uuid
@@ -411,3 +412,67 @@ def test_bff_application_view_degrades_without_scoring():
     dashboard = httpx.get(f"{GATEWAY}/bff/recruiter/dashboard", headers=rec).json()
     assert [(j["id"], j["total_applications"]) for j in dashboard["jobs"]] == [(job["id"], 1)]
     assert dashboard["metrics"]["total_applications"] >= 1 and dashboard["degraded"] == []
+
+
+# ---------- Phase 13: one trace across HTTP, Kafka, Temporal and Celery ----------
+
+JAEGER = "http://localhost:16686/api"
+
+
+def jaeger_trace(trace_id: str) -> list[dict]:
+    """Every span of the trace as {service, name, tags}; [] until Jaeger has it."""
+    r = httpx.get(f"{JAEGER}/traces/{trace_id}")
+    if r.status_code != 200 or not r.json()["data"]:
+        return []
+    trace = r.json()["data"][0]
+    services = {key: p["serviceName"] for key, p in trace["processes"].items()}
+    return [{"service": services[s["processID"]], "name": s["operationName"],
+             "tags": {t["key"]: t["value"] for t in s["tags"]}} for s in trace["spans"]]
+
+
+def test_one_trace_links_an_applications_workflow_and_its_events():
+    """Step 13.8: for one application, its Temporal workflow AND the Kafka events it produced are in ONE
+    trace. The test sends its own W3C traceparent, so it knows the trace id in advance."""
+    _, recruiter_token = register("RECRUITER")
+    job = published_job(recruiter_token, required_skills=["Python"])
+    wait_for(lambda: sql(f"SELECT status FROM application.job_replica WHERE job_id = '{job['id']}'") == "READY",
+             what="the replica")
+    _, auth = candidate_with_parsed_resume()
+    trace_id = uuid.uuid4().hex
+    r = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]},
+                   headers={**auth, "Idempotency-Key": str(uuid.uuid4()), "traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"})
+    assert r.status_code == 202, r.text
+    application_id = r.json()["id"]
+
+    def complete():  # the last hops (the SCREENING email, Analytics) and the gateway's span, which APISIX
+        names = {(s["service"], s["name"]) for s in jaeger_trace(trace_id)}  # exports in batches, ~5-7 s late
+        return {("notification-worker", "smtp send"), ("analytics", "process ApplicationStageChanged"),
+                ("gateway", "POST /api/applications")} <= names
+    wait_for(complete, timeout=90, what="the whole journey in Jaeger")
+    spans = jaeger_trace(trace_id)
+    names = {(s["service"], s["name"]) for s in spans}
+
+    # HTTP: gateway -> application (-> candidate for the profile)
+    assert {("gateway", "POST /api/applications"), ("application", "POST /applications"),
+            ("candidate", "GET /candidates/me")} <= names
+    # Kafka: the outbox relay published, three consumer groups processed, each span names its event id
+    events = dict(row.split("|") for row in sql(
+        f"SELECT (payload->>'event_type') || '|' || (payload->>'event_id') FROM application.outbox "
+        f"WHERE message_key = '{application_id}'").splitlines())
+    consumed = {s["tags"].get("messaging.message.id") for s in spans if s["name"].startswith("process ")}
+    assert {events["ApplicationSubmitted"], events["ApplicationStageChanged"]} <= consumed
+    assert {("application", "publish applications.lifecycle"), ("notification", "process ApplicationSubmitted"),
+            ("analytics", "process ApplicationSubmitted"), ("application", "process ApplicationSubmitted")} <= names
+    # Temporal: started by the consumer, ran its activities in two services, then the score event
+    workflow = next(s for s in spans if s["name"] == "RunWorkflow:ApplicationWorkflow")
+    assert workflow["tags"]["temporalWorkflowID"] == f"app-{application_id}"  # -> the Temporal UI / history
+    assert {("application", "StartWorkflow:ApplicationWorkflow"), ("scoring", "RunActivity:score_application"),
+            ("application", "RunActivity:record_score_and_advance"), ("scoring", "publish scoring.results")} <= names
+    # Celery: the email task continued the same trace in the worker, down to SMTP
+    assert {("notification", "apply_async/send_email"), ("notification-worker", "run/send_email")} <= names
+
+    # ...and Temporal's own history of that workflow, found by the id the trace gave us
+    described = json.loads(subprocess.run(
+        ["docker", "compose", "exec", "-T", "temporal", "temporal", "workflow", "describe", "-w", f"app-{application_id}", "-o", "json"],
+        check=True, capture_output=True, text=True).stdout)
+    assert described["workflowExecutionInfo"]["status"] == "WORKFLOW_EXECUTION_STATUS_COMPLETED"

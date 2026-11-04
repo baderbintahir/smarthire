@@ -61,7 +61,7 @@ plugins:
   - mocking                      # fixed JSON 404 for unknown paths
   - prometheus                   # metrics, scraped in Phase 13
   - smarthire-retry-after        # ours: Retry-After on 429
-  # opentelemetry is added in Phase 13 (needs the Jaeger collector to exist)
+  - opentelemetry                # a span per request, exported to Jaeger; traceparent forwarded upstream
 
 # TCP/UDP (stream) proxying is unused. Its default plugin list loaded `syslog`, which failed
 # at startup on 3.19.0 ("prometheus-cache not configured"): load none.

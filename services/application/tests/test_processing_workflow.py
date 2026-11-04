@@ -115,6 +115,10 @@ async def test_unscorable_application_is_pending_manual_but_still_screened(env, 
     assert await run(env, application_id, score_activity) == "PENDING_MANUAL"
     [(status, score, score_status)] = await fetch("SELECT status, score, score_status FROM applications")
     assert (status, score, score_status) == ("SCREENING", None, "PENDING_MANUAL")
+    # Step 13.5: the give-up is reported, in the same transaction as PENDING_MANUAL
+    events = {e["event_type"]: e["payload"] for (e,) in await fetch("SELECT payload FROM outbox")}
+    assert events["SystemFailure"]["source"] == "application_workflow"
+    assert events["SystemFailure"]["kind"] == "WORKFLOW_FAILED" and "no resume" in events["SystemFailure"]["detail"]
 
 
 async def test_scoring_has_an_overall_deadline():

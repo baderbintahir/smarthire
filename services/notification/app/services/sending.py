@@ -15,7 +15,9 @@ from collections.abc import Callable
 from email.message import EmailMessage
 
 import pybreaker
+from opentelemetry.trace import SpanKind
 from smarthire_common.db import session_scope
+from smarthire_common.telemetry import get_tracer
 
 from app.domain.templates import render
 from app.repositories import notifications as repo
@@ -34,8 +36,11 @@ def smtp_mailer(host: str, port: int, sender: str) -> Callable[[str, str, str], 
         message = EmailMessage()
         message["From"], message["To"], message["Subject"] = sender, to, subject
         message.set_content(body)
-        with smtplib.SMTP(host, port, timeout=10) as smtp:
-            smtp.send_message(message)
+        # smtplib has no OpenTelemetry instrumentation: a hand-made span, the last hop of the trace
+        with get_tracer().start_as_current_span("smtp send", kind=SpanKind.CLIENT,
+                                                attributes={"server.address": host, "server.port": port}):
+            with smtplib.SMTP(host, port, timeout=10) as smtp:
+                smtp.send_message(message)
 
     return send
 

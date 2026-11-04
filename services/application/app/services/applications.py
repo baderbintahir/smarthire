@@ -4,6 +4,7 @@ CLAUDE.md: get_session's commit runs after the response is sent)."""
 import uuid
 from datetime import UTC, datetime
 
+from prometheus_client import Counter
 from smarthire_common.auth import CurrentUser
 from smarthire_common.events import new_event
 from smarthire_common.outbox import add_outbox_event
@@ -19,6 +20,10 @@ from app.repositories.candidate_api import CandidateClient
 from app.schemas.application import application_out
 from app.services import workflows
 from app.services.idempotency import IdempotencyStore
+
+
+# A business metric (Step 13.4): Prometheus shows applications per minute without asking Analytics
+APPLICATIONS_SUBMITTED = Counter("smarthire_applications_submitted_total", "Applications submitted")
 
 
 def _job_facts(job: JobReplica | None) -> rules.JobFacts | None:
@@ -68,6 +73,7 @@ async def submit(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID, *,
         # Starts the application workflow (Phase 10); Notification and Analytics react too
         await _publish(session, "ApplicationSubmitted", application, job, {"recruiter_id": str(job.recruiter_id)})
         await session.commit()
+        APPLICATIONS_SUBMITTED.inc()  # only once committed (a rolled-back apply didn't happen)
     except IntegrityError as exc:
         # 6. uq_applications_candidate_job: this candidate already applied (maybe a moment ago, in
         #    a parallel request that passed every check above too). The database is the final guard

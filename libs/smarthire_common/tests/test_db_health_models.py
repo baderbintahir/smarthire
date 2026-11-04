@@ -131,3 +131,28 @@ def test_new_id_is_uuid7_and_time_ordered():
     ids = [new_id() for _ in range(50)]
     assert all(i.version == 7 for i in ids)
     assert [i.int for i in ids] == sorted(i.int for i in ids)
+
+
+def test_metrics_endpoint_and_request_metrics_by_route_template():
+    from prometheus_client import REGISTRY
+
+    from smarthire_common.metrics import setup_metrics
+
+    app = FastAPI()
+    setup_metrics(app)
+    app.include_router(health.health_router)
+
+    @app.get("/things/{thing_id}")
+    async def thing(thing_id: str) -> dict:
+        return {}
+
+    def count(route, status):
+        return REGISTRY.get_sample_value("http_requests_total", {"method": "GET", "route": route, "status": status}) or 0
+
+    before = count("/things/{thing_id}", "200"), count("unmatched", "404")
+    with TestClient(app) as c:
+        c.get("/things/1"), c.get("/things/2"), c.get("/nope"), c.get("/health/live")
+        body = c.get("/metrics")
+    assert (count("/things/{thing_id}", "200"), count("unmatched", "404")) == (before[0] + 2, before[1] + 1)
+    assert body.headers["content-type"].startswith("text/plain") and "http_request_duration_seconds_bucket" in body.text
+    assert 'route="/health/live"' not in body.text  # probes are not counted

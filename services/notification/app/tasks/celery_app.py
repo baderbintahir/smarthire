@@ -5,10 +5,11 @@ which triggers the sweeper every minute:
 
 (Exactly one beat may run, so the worker is not scaled while beat is embedded in it.)"""
 
-from celery.signals import worker_process_init
+from celery.signals import worker_process_init, worker_process_shutdown
 from smarthire_common.celery import make_celery
 from smarthire_common.db import init_db
 from smarthire_common.logging import setup_logging
+from smarthire_common.telemetry import flush_tracing, setup_tracing
 
 from app.config import Settings
 from app.tasks.names import QUEUE, REQUEUE_STALE
@@ -23,4 +24,12 @@ celery_app.conf.beat_schedule = {"requeue-stale-emails": {"task": REQUEUE_STALE,
 @worker_process_init.connect
 def _init_worker_process(**_kwargs) -> None:
     setup_logging(f"{settings.service_name}-worker", settings.log_level)
+    # Tracing per CHILD process (its export thread must start after the fork). The Celery
+    # instrumentation continues the trace of whoever enqueued the task (traceparent in the task headers)
+    setup_tracing(settings, service_name=f"{settings.service_name}-worker")
     init_db(settings.database_url)
+
+
+@worker_process_shutdown.connect
+def _stop_worker_process(**_kwargs) -> None:
+    flush_tracing()  # send the spans still queued

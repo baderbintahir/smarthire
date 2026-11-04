@@ -4,10 +4,20 @@ import sys
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
+from opentelemetry import trace
+
 # One value per async task (= per request), unlike a global shared by all concurrent requests.
 # Middleware sets it at the start of a request; every log line then picks it up automatically.
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 
+
+def _trace_ids() -> dict:
+    """The current span's ids (hex, as Jaeger shows them), so a trace found in Jaeger can be grepped
+    in the logs. Null outside a span or while tracing is off."""
+    ctx = trace.get_current_span().get_span_context()
+    if not ctx.is_valid:
+        return {"trace_id": None, "span_id": None}
+    return {"trace_id": format(ctx.trace_id, "032x"), "span_id": format(ctx.span_id, "016x")}
 
 class JsonFormatter(logging.Formatter):
     """Renders each log record as one JSON object per line."""
@@ -24,6 +34,7 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
             "request_id": request_id_var.get(),
+            **_trace_ids(),
         }
         if record.exc_info:
             entry["exception"] = self.formatException(record.exc_info)

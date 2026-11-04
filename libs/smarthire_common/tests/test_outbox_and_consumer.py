@@ -167,14 +167,26 @@ def make_consumer(handlers, **kwargs) -> EventConsumer:
 
 
 class FakeMessage:
-    def __init__(self, value):
-        self._value = value
+    def __init__(self, value, headers=None, topic="identity.users"):
+        self._value, self._headers, self._topic = value, headers, topic
 
     def value(self):
         return self._value
 
+    def headers(self):
+        return self._headers
+
     def topic(self):
-        return "identity.users"
+        return self._topic
+
+    def key(self):
+        return b"key"
+
+    def partition(self):
+        return 0
+
+    def offset(self):
+        return 7
 
 
 async def test_same_event_twice_runs_the_handler_once(database):
@@ -263,3 +275,37 @@ async def test_retry_later_is_never_dead_lettered(database):
         await consumer.handle_message(FakeMessage(b"..."))
     assert consumer.dead_lettered == []
     assert await scalar("SELECT count(*) FROM processed_events") == 0  # not marked processed
+
+
+async def test_a_dead_letter_also_reports_a_system_failure(database):
+    consumer = EventConsumer(name="test-consumer", topics=["identity.users"], handlers={},
+                             bootstrap_servers="unused", schema_registry_url="unused", service_name="candidate")
+    sent = []
+    consumer._dlq_producer = object()  # dead_letter's real producer is never touched: _produce_and_wait is faked
+    consumer._produce_and_wait = lambda topic, key, value, headers: sent.append((topic, value))
+    consumer._failure_serializer = lambda event_type, envelope, topic: envelope  # no registry here
+    await consumer.dead_letter(FakeMessage(b"x"), ValueError("not JSON"))
+    assert [topic for topic, _ in sent] == ["identity.users.dlq", "system.failures"]
+    failure = sent[1][1]
+    assert failure["producer"] == "candidate" and failure["payload"] == {
+        "source": "test-consumer", "kind": "DEAD_LETTER", "detail": "identity.users: ValueError: not JSON"}
+
+
+async def test_a_failing_system_failure_is_not_reported_again(database):
+    consumer = EventConsumer(name="analytics", topics=["system.failures"], handlers={},
+                             bootstrap_servers="unused", schema_registry_url="unused")
+    sent = []
+    consumer._dlq_producer = object()
+    consumer._produce_and_wait = lambda topic, key, value, headers: sent.append(topic)
+    await consumer.dead_letter(FakeMessage(b"x", topic="system.failures"), ValueError("bug"))
+    assert sent == ["system.failures.dlq"]  # no SystemFailure about a SystemFailure (no loop)
+
+
+async def test_a_replay_does_not_dead_letter_again(database):
+    consumer = EventConsumer(name="analytics", topics=["identity.users"], handlers={},
+                             bootstrap_servers="unused", schema_registry_url="unused")
+    sent = []
+    consumer._produce_and_wait = lambda topic, key, value, headers: sent.append(topic)
+    consumer._replaying = True  # what replay_from_beginning sets (it needs a real Kafka to run)
+    await consumer.dead_letter(FakeMessage(b"x"), ValueError("not JSON"))
+    assert sent == []  # dead-lettered and reported when it was first read, not on every rebuild

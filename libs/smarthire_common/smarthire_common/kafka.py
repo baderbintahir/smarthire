@@ -7,6 +7,7 @@ finds its id already there and is skipped. Effects happen once, even though deli
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -15,6 +16,7 @@ from confluent_kafka import OFFSET_BEGINNING, Consumer, KafkaError, Message, Pro
 from confluent_kafka.schema_registry import SchemaRegistryClient, topic_record_subject_name_strategy
 from confluent_kafka.schema_registry.json_schema import JSONDeserializer, JSONSerializer
 from confluent_kafka.serialization import MessageField, SerializationContext, SerializationError
+from opentelemetry.trace import SpanKind
 from pydantic import ValidationError
 from sqlalchemy import DateTime, Text, Uuid, func
 from sqlalchemy.dialects.postgresql import insert
@@ -24,7 +26,9 @@ from sqlalchemy.sql import column, table
 
 from smarthire_common.db import session_scope
 from smarthire_common.event_catalog import schema_str
-from smarthire_common.events import EventEnvelope
+from smarthire_common.events import EventEnvelope, new_event
+from smarthire_common.metrics import CONSUMER_LAG, DLQ_MESSAGES, EVENTS_CONSUMED
+from smarthire_common.telemetry import context_from_headers, current_context_headers, get_tracer
 
 log = logging.getLogger(__name__)
 
@@ -127,16 +131,22 @@ class EventConsumer:
         schema_registry_url: str,
         max_attempts: int = 3,
         backoff_seconds: float = 0.5,
+        service_name: str = "unknown",
+        lag_every: float = 10.0,
     ) -> None:
         self.name = name  # also the consumer group id and the consumer_name in processed_events
         self.topics = topics
         self.handlers = handlers
         self.max_attempts = max_attempts
         self.backoff_seconds = backoff_seconds
+        self.service_name = service_name  # the `producer` of the SystemFailure events it reports
+        self.lag_every = lag_every  # how often to update the consumer-lag gauges
         self._bootstrap_servers = bootstrap_servers
         self._registry_url = schema_registry_url
         self._deserializer: JSONDeserializer | None = None
         self._dlq_producer: Producer | None = None
+        self._failure_serializer: EventSerializer | None = None
+        self._replaying = False  # set by replay_from_beginning
 
     # ---- the loop (needs Kafka) ----
 
@@ -152,8 +162,15 @@ class EventConsumer:
         )
         consumer.subscribe(self.topics)
         log.info("consumer %s started on %s", self.name, self.topics)
+        measured_at = 0.0
         try:
             while True:
+                if time.monotonic() - measured_at >= self.lag_every:
+                    measured_at = time.monotonic()
+                    try:
+                        await self._measure_lag(consumer)
+                    except Exception:
+                        log.warning("consumer %s: could not measure lag", self.name, exc_info=True)
                 # poll() blocks for up to 1 s: run it in a thread so the event loop stays free
                 msg = await asyncio.to_thread(consumer.poll, 1.0)
                 if msg is None:
@@ -175,6 +192,17 @@ class EventConsumer:
         finally:
             await asyncio.to_thread(consumer.close)  # leave the group cleanly: partitions move on at once
 
+    async def _measure_lag(self, consumer: Consumer) -> None:
+        """LAG = messages in a partition that this group hasn't finished yet (last offset - committed).
+        Growing lag = consumers falling behind (slow, stuck, or down): the key Kafka health signal."""
+        assignment = await asyncio.to_thread(consumer.assignment)
+        if not assignment:
+            return
+        for tp in await asyncio.to_thread(consumer.committed, assignment, 5):
+            low, high = await asyncio.to_thread(consumer.get_watermark_offsets, tp, 5)
+            done = tp.offset if tp.offset >= 0 else low  # nothing committed yet: everything still to read
+            CONSUMER_LAG.labels(self.name, tp.topic, str(tp.partition)).set(max(high - done, 0))
+
     async def replay_from_beginning(self) -> int:
         """Re-read the topics from their FIRST message up to where they end right now, process every
         message like run() does, commit offsets, then stop. Used to rebuild a read model (Analytics,
@@ -189,6 +217,7 @@ class EventConsumer:
             c.assign(partitions)
 
         consumer.subscribe(self.topics, on_assign=from_the_start)
+        self._replaying = True  # see dead_letter: no second DLQ copy / SystemFailure for old messages
         ends: dict[tuple[str, int], int] = {}  # where each partition ends NOW (later messages: run()'s job)
         read = 0
         try:
@@ -213,28 +242,44 @@ class EventConsumer:
 
     async def handle_message(self, msg: Message) -> None:
         """Returns normally when the message is DONE (processed, skipped, or dead-lettered): the
-        caller then commits its offset. Raises when it should be retried later."""
+        caller then commits its offset. Raises when it should be retried later.
+
+        Runs in a CONSUMER span whose parent comes from the message headers (the relay's publish span),
+        so the handler's SQL, HTTP calls, new events, workflow starts and Celery tasks join that trace."""
+        headers = {k: v.decode(errors="replace") if isinstance(v, bytes) else v for k, v in (msg.headers() or [])}
+        with get_tracer().start_as_current_span(
+            f"process {msg.topic()}", context=context_from_headers(headers), kind=SpanKind.CONSUMER,
+            attributes={"messaging.system": "kafka", "messaging.destination.name": msg.topic(),
+                        "messaging.consumer.group.name": self.name},
+        ) as span:
+            event_type, outcome = await self._handle(msg, span)
+            span.set_attribute("outcome", outcome)
+            EVENTS_CONSUMED.labels(self.name, event_type, outcome).inc()
+
+    async def _handle(self, msg: Message, span) -> tuple[str, str]:
+        """-> (event type, outcome: processed | duplicate | ignored | dead_lettered)."""
         try:
             envelope = EventEnvelope.model_validate(self._deserialize(msg))
         except (SerializationError, ValidationError, ValueError) as exc:
             # Unreadable (not JSON, not our format) or invalid: retrying can't help ("poison
             # message"). Park it and move on. A registry that is DOWN raises other errors: retried
             await self.dead_letter(msg, exc)
-            return
+            return "unreadable", "dead_lettered"
+        span.update_name(f"process {envelope.event_type}")
+        span.set_attribute("messaging.message.id", str(envelope.event_id))  # find an event's trace by its id
         handler = self.handlers.get(envelope.event_type)
         if handler is None:
-            return
+            return envelope.event_type, "ignored"
         for attempt in range(1, self.max_attempts + 1):
             try:
-                await self.process(envelope, handler)
-                return
+                return envelope.event_type, "processed" if await self.process(envelope, handler) else "duplicate"
             except RetryLater:
                 raise  # not the event's fault: run() seeks back and retries later, never DLQ
             except Exception as exc:
                 if attempt == self.max_attempts:
                     log.exception("consumer %s: %s %s failed %d times", self.name, envelope.event_type, envelope.event_id, attempt)
                     await self.dead_letter(msg, exc)
-                    return
+                    return envelope.event_type, "dead_lettered"
                 await asyncio.sleep(self.backoff_seconds * 2 ** (attempt - 1))  # 0.5 s, 1 s, ...
 
     async def process(self, envelope: EventEnvelope, handler: Handler) -> bool:
@@ -256,6 +301,11 @@ class EventConsumer:
     async def dead_letter(self, msg: Message, error: Exception) -> None:
         """Copy the message, unchanged, to <topic>.dlq with the error in its headers, for a human to
         inspect and replay. Raises if the DLQ write fails (then the message is retried, not lost)."""
+        if self._replaying:
+            # A rebuild re-reads messages that were already dead-lettered (and reported) when first read:
+            # another copy + another SystemFailure on every rebuild would make the failure counts grow
+            log.error("consumer %s (replay): skipping %s[%s]@%s: %s", self.name, msg.topic(), msg.partition(), msg.offset(), error)
+            return
         if self._dlq_producer is None:
             self._dlq_producer = make_producer(self._bootstrap_servers, f"{self.name}-dlq")
         headers = list(msg.headers() or []) + [
@@ -266,7 +316,24 @@ class EventConsumer:
             ("x-original-offset", str(msg.offset())),
         ]
         await asyncio.to_thread(self._produce_and_wait, f"{msg.topic()}.dlq", msg.key(), msg.value(), headers)
+        DLQ_MESSAGES.labels(self.name, msg.topic()).inc()
         log.error("consumer %s: sent %s[%s]@%s to the DLQ: %s", self.name, msg.topic(), msg.partition(), msg.offset(), error)
+        if msg.topic() != "system.failures":  # a failing SystemFailure consumer must not report itself forever
+            try:
+                await asyncio.to_thread(self._report_failure, msg.topic(), error)
+            except Exception:
+                log.warning("consumer %s: could not publish SystemFailure", self.name, exc_info=True)
+
+    def _report_failure(self, topic: str, error: Exception) -> None:
+        """SystemFailure on system.failures (Step 13.5; Analytics counts them). Sent DIRECTLY, not through
+        an outbox: there is no DB transaction to join here (the handler's rolled back), and the DLQ copy
+        above is the durable record. Best effort: if this send fails, the failure is only logged."""
+        if self._failure_serializer is None:
+            self._failure_serializer = EventSerializer(make_registry(self._registry_url))
+        event = new_event("SystemFailure", producer=self.service_name, payload={
+            "source": self.name, "kind": "DEAD_LETTER", "detail": f"{topic}: {type(error).__name__}: {error}"[:1000]})
+        value = self._failure_serializer("SystemFailure", event.model_dump(mode="json"), "system.failures")
+        self._produce_and_wait("system.failures", self.name.encode(), value, list(current_context_headers().items()))
 
     def _produce_and_wait(self, topic: str, key, value, headers) -> None:
         result: list = []
@@ -290,5 +357,6 @@ def start_consumer(settings, *, name: str, topics: list[str], handlers: dict[str
         handlers=handlers,
         bootstrap_servers=settings.kafka_bootstrap_servers,
         schema_registry_url=settings.schema_registry_url,
+        service_name=settings.service_name,
     )
     return asyncio.create_task(consumer.run(), name=f"consumer-{name}")

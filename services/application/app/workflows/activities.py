@@ -35,10 +35,11 @@ async def init_stages(application_id: str) -> dict:
 
 
 @activity.defn(name="record_score_and_advance")
-async def record_score_and_advance(application_id: str, result: dict | None) -> str:
+async def record_score_and_advance(application_id: str, result: dict | None, failure: str | None = None) -> str:
     """Save the score (or PENDING_MANUAL), and move a still-SUBMITTED application to SCREENING with its
     history row and ApplicationStageChanged, all in one transaction. If a recruiter already moved it,
-    only the score is saved; if it's no longer active (withdrawn, closed, decided), nothing happens."""
+    only the score is saved; if it's no longer active (withdrawn, closed, decided), nothing happens.
+    `failure` (scoring gave up) is reported as a SystemFailure event in the same transaction."""
     async with session_scope() as session:
         stmt = (select(Application, JobReplica).join(JobReplica)
                 .where(Application.id == uuid.UUID(application_id)).with_for_update(of=Application))
@@ -60,6 +61,11 @@ async def record_score_and_advance(application_id: str, result: dict | None) -> 
                 "candidate_id": str(application.candidate_id), "job_title": job.title,
                 "from_stage": from_stage, "to_stage": SCREENING})
             await add_outbox_event(session, event, key=application_id)
+        if failure:  # operators see it in Analytics' failure counts; the application still moves on
+            report = new_event("SystemFailure", producer="application", payload={
+                "source": "application_workflow", "kind": "WORKFLOW_FAILED",
+                "detail": f"application {application_id}: {failure}"[:1000]})
+            await add_outbox_event(session, report, key=application_id)
         return SCREENING if advance else "SCORE_ONLY"
 
 

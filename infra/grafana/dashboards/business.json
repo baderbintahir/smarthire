@@ -1,0 +1,218 @@
+{
+  "uid": "smarthire-business",
+  "title": "SmartHire / Business",
+  "description": "Live business activity from Prometheus (seconds old). The authoritative numbers are Analytics' /analytics/metrics.",
+  "tags": [
+    "smarthire"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Applications per minute",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(smarthire_applications_submitted_total[5m])) * 60",
+          "legendFormat": "applications/min",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 1
+    },
+    {
+      "type": "stat",
+      "title": "Applications (24 h)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(smarthire_applications_submitted_total[24h]))",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 6,
+        "h": 8,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 2
+    },
+    {
+      "type": "stat",
+      "title": "Jobs published (24 h)",
+      "description": "Publishing workflows that finished (READY or FAILED; failures are on Async processing)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(temporal_workflow_completed{workflow_type=\"JobPublishingWorkflow\"}[24h]))",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 6,
+        "h": 8,
+        "x": 18,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "id": 3
+    },
+    {
+      "type": "timeseries",
+      "title": "Applications scored per hour",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(smarthire_events_consumed_total{consumer=\"analytics\", event_type=\"CandidateScored\", outcome=\"processed\"}[1h]))",
+          "legendFormat": "scored",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 4
+    },
+    {
+      "type": "timeseries",
+      "title": "Events handled by Notification per hour",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (event_type) (increase(smarthire_events_consumed_total{consumer=\"notification\", outcome=\"processed\"}[1h]))",
+          "legendFormat": "{{event_type}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 12,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 5
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  }
+}

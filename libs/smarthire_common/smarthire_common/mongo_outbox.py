@@ -61,6 +61,16 @@ class MongoOutboxRelay(OutboxRelay):
             await collection.update_many({"_id": {"$in": sent_ids}}, {"$set": {"published_at": datetime.now(UTC)}})
         return len(sent_ids), len(rows)
 
+    async def measure_backlog(self) -> tuple[int, float]:
+        collection = get_db()[COLLECTION]
+        count = await collection.count_documents({"published_at": None})
+        oldest = await collection.find_one({"published_at": None}, sort=[("created_at", 1)])
+        if oldest is None:
+            return count, 0.0
+        created = oldest["created_at"]
+        created = created if created.tzinfo else created.replace(tzinfo=UTC)  # tz-naive if the client isn't tz_aware
+        return count, (datetime.now(UTC) - created).total_seconds()
+
 
 def start_mongo_outbox_relay(settings):
     import asyncio

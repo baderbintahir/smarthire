@@ -1,0 +1,45 @@
+# Alert rules (Step 13.8). Prometheus evaluates them every 15 s; firing alerts show under Alerts in its
+# UI (http://localhost:9090/alerts). No Alertmanager locally: in production one would route them to
+# chat/e-mail/on-call.
+groups:
+  - name: smarthire
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        annotations:
+          summary: "{{ $labels.instance }} has not answered Prometheus for a minute"
+
+      # ---- Temporal (orchestration)
+      - alert: WorkflowFailed
+        expr: sum by (workflow_type) (increase(temporal_workflow_failed[5m])) > 0
+        annotations:
+          summary: "A {{ $labels.workflow_type }} failed: find it in the Temporal UI (status Failed)"
+      - alert: WorkersFallingBehind
+        expr: histogram_quantile(0.95, sum by (le, task_queue) (rate(temporal_activity_schedule_to_start_latency_bucket[5m]))) > 5
+        for: 2m
+        annotations:
+          summary: "Activities on {{ $labels.task_queue }} wait > 5 s for a worker (too few workers, or one is down)"
+
+      # ---- Kafka (choreography)
+      - alert: ConsumerLagGrowing
+        expr: sum by (consumer) (smarthire_consumer_lag) > 100 and sum by (consumer) (delta(smarthire_consumer_lag[5m])) > 0
+        for: 5m
+        annotations:
+          summary: "Consumer group {{ $labels.consumer }} is falling behind"
+      - alert: MessageDeadLettered
+        expr: sum by (consumer, topic) (increase(smarthire_dlq_messages_total[10m])) > 0
+        annotations:
+          summary: "{{ $labels.consumer }} dead-lettered a message from {{ $labels.topic }}: inspect {{ $labels.topic }}.dlq"
+      - alert: OutboxStuck
+        expr: smarthire_outbox_oldest_age_seconds > 60
+        for: 1m
+        annotations:
+          summary: "{{ $labels.service }} has events waiting > 60 s in its outbox (Kafka down or the relay stuck)"
+
+      # ---- Celery
+      - alert: TaskQueueBackingUp
+        expr: sum by (queue) (rabbitmq_detailed_queue_messages_ready{queue=~"emails|resumes"}) > 50
+        for: 5m
+        annotations:
+          summary: "{{ $labels.queue }} has > 50 tasks waiting (workers stopped or too slow)"

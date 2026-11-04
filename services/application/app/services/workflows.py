@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from smarthire_common.kafka import RetryLater
+from smarthire_common.metrics import WORKFLOWS_STARTED
 from smarthire_common.temporal import connect
 from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
@@ -25,6 +26,7 @@ async def start(settings, application_id: str) -> None:
     try:
         await client.start_workflow("ApplicationWorkflow", application_id, id=workflow_id(application_id),
                                     task_queue=APPLICATION_TQ, id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE)
+        WORKFLOWS_STARTED.labels("ApplicationWorkflow").inc()
         log.info("started %s", workflow_id(application_id))
     except WorkflowAlreadyStartedError:
         log.info("%s already started: ignoring the duplicate", workflow_id(application_id))

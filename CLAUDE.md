@@ -96,13 +96,13 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 11 Notification: [x] 11.1 mailpit + tables · [x] 11.2 consumers -> tasks · [x] 11.3 sending, retries, circuit breaker (notification 17, identity 38, gateway 14, events e2e 11; break-it verified)
 - [x] Phase 12 Analytics: [x] 12.1 projections · [x] 12.2 consumers · [x] 12.3 metrics API · [x] 12.4 rebuild (analytics 8, events e2e 13: metrics follow actions, rebuild identical)
 - [x] Phase 12B BFF (API composition): [x] 12B.1 scaffold + gateway route · [x] 12B.2 composed application view + recruiter dashboard (bff 11, events e2e 14)
-- [ ] Phase 13 Observability
+- [x] Phase 13 Observability: [x] 13.1 jaeger/prometheus/grafana + /metrics · [x] 13.2 OTel chassis · [x] 13.3 async propagation · [x] 13.4 metrics · [x] 13.5 failures topic · [x] 13.6 dashboards · [x] 13.7 gateway telemetry · [x] 13.8 Kafka vs Temporal (chassis 101, all service suites pass, gateway 14, events e2e 15; break-its verified)
 - [ ] Phase 14 Reliability + load tests (tag v0.1-core)
 - [ ] Phase 15 Semantic index
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** Phase 13 (Observability).
+**Next step:** Phase 14 (Reliability + load tests).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -597,3 +597,80 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   (Compose: localhost:9000) with region us-east-1 (no network call to sign). Bucket stays private.
 - e2e flakiness: the gateway suite and the events suite both log in many users; run back to back they can hit the
   30 logins/min/IP limit (429). Wait a minute between them if a run fails at login.
+- Step 13.1 (step by step again): Jaeger `jaegertracing/jaeger:2.20.0` (v2 all-in-one, in-memory: traces lost on restart;
+  UI http://localhost:16686; OTLP 4317 gRPC / 4318 HTTP inside Compose only). PINNED BELOW 2.21: 2.21 removed the v1 HTTP
+  query API (/api/services, /api/traces) that Grafana 13.2's Jaeger data source still calls (health check 404;
+  grafana/grafana-jaeger-datasource#87). Prometheus `prom/prometheus:v3.13.4` (http://localhost:9090, volume promdata;
+  config dir infra/prometheus mounted, changes need `docker compose restart prometheus`); jobs `services` (9 FastAPI
+  services by Compose name), `gateway` (gateway:9091, path /apisix/prometheus/metrics), `prometheus`. Grafana
+  `grafana/grafana:13.2.5` on HOST PORT 3001 (deviation from 3000: a local node dev server held [::1]:3000 and
+  `localhost` resolved to it), admin/admin, volume grafanadata; data sources provisioned from
+  infra/grafana/provisioning/datasources (uids `prometheus` default, `jaeger`). All published on 127.0.0.1 only.
+- Chassis `metrics.py`: `metrics_router` (GET /metrics, prometheus_client default registry, built-in process/GC
+  collectors only so far); every service's create_app includes it (template too). New chassis dep prometheus-client;
+  all service uv.locks refreshed. Celery workers have no /metrics yet (13.4).
+- Step 13.2: chassis `telemetry.py`: `setup_tracing(settings, app)` in every create_app (right after `app = FastAPI(...)`,
+  BEFORE the lifespan creates clients) and `flush_tracing()` at the end of every lifespan. One global TracerProvider per
+  process (service.name = SERVICE_NAME), BatchSpanProcessor -> OTLP over HTTP (`otlp_endpoint`
+  http://jaeger:4318/v1/traces; HTTP chosen over gRPC to avoid the grpcio dependency). Auto-instrumented: FastAPI (excludes
+  /health/*, /metrics), httpx (injects traceparent: BFF -> services is ONE trace), Redis, PyMongo (works with the async
+  client, verified), SQLAlchemy via `trace_engine(engine)` called from `db.init_db`. SQLAlchemy GOTCHA: the instrumentation
+  declares `sqlalchemy < 2.1` and silently refuses on our 2.1 (logs an ERROR) -> `skip_dep_check=True` (engine events
+  unchanged; chassis test fails without it). Settings `tracing_enabled` (default False: tests never export) +
+  `otlp_endpoint`; Compose sets TRACING_ENABLED=true on the 9 API services. Workers are not traced yet (13.3).
+  JSON log lines now carry `trace_id`/`span_id` (hex, as in Jaeger; null outside a span).
+- Verified: e2e BFF call = one trace bff_web -> identity (JWKS) / application / candidate / scoring with SQL, MGET and
+  Mongo spans; the trace_id is in all four services' logs. Jaeger stopped -> requests unaffected (spans dropped in the
+  background). Rebuild gotcha: run `uv lock` in every service BEFORE `docker compose build` (images use the lock files).
+- Phase 13.3-13.8 were built in one pass at the user's request (13.1-13.2 step by step).
+- TRACE PROPAGATION (13.3): `new_event` stores the current W3C context in `envelope.trace_context` (outbox row
+  `headers` too). The relay (KafkaSender) opens a PRODUCER span `publish <topic>` as CHILD of that stored context and
+  puts ITS OWN context in the Kafka headers; `EventConsumer.handle_message` opens a CONSUMER span `process <EventType>`
+  from the message headers (attribute messaging.message.id = event_id, outcome). Celery: opentelemetry-instrumentation-
+  celery (chassis `celery` extra; sending side instrumented by setup_tracing in the API, worker side by
+  `setup_tracing(settings, service_name="<svc>-worker")` in worker_process_init; flush in worker_process_shutdown).
+  Temporal: chassis `connect()` adds `TracingInterceptor` (temporalio[opentelemetry]); workers built on that client
+  inherit it (spans StartWorkflow/RunWorkflow/StartActivity/RunActivity, tag temporalWorkflowID). Notification has a
+  hand-made `smtp send` span. Celery workers' Jaeger names: candidate-worker, notification-worker.
+- SAMPLER: ParentBased(root=_SkipBackgroundRoots): parentless CLIENT/INTERNAL spans are DROPPED (relay polling SQL,
+  readiness pings, Mongo relay finds); traces start only at SERVER/CONSUMER/PRODUCER spans. A test checks it.
+- GATEWAY TRACING (13.7): APISIX `opentelemetry` plugin in config.yaml's plugin list + global rule (sampler always_on).
+  GOTCHA on 3.19: its collector settings live in apisix.yaml `plugin_metadata` (id opentelemetry: collector
+  jaeger:4318, resource service.name gateway), NOT config.yaml plugin_attr; without metadata it silently skips every
+  request (warn log). Gateway spans are trace roots; it forwards traceparent (and honours a client's traceparent).
+- METRICS (13.4), chassis metrics.py (all names in one place): `setup_metrics(app)` = GET /metrics +
+  HttpMetricsMiddleware (`http_requests_total{method,route,status}`, `http_request_duration_seconds{method,route}`;
+  route = FastAPI route TEMPLATE, "unmatched" for 404s; /health/* and /metrics not counted). Events:
+  `smarthire_outbox_published_total{topic}`, `smarthire_outbox_backlog`, `smarthire_outbox_oldest_age_seconds` (relay
+  measures every 5 s; also the Mongo relay), `smarthire_events_consumed_total{consumer,event_type,outcome}`,
+  `smarthire_consumer_lag{consumer,topic,partition}` (every 10 s: high watermark - committed), 
+  `smarthire_dlq_messages_total{consumer,topic}`, `smarthire_workflows_started_total{workflow_type}` (Job and Application
+  handlers). Application: `smarthire_applications_submitted_total` (after commit). Gauges without labels exist in
+  every service (0 where there's no outbox): dashboards filter by service. Temporal SDK metrics via a Runtime with
+  PrometheusConfig on `temporal_metrics_bind` 0.0.0.0:9464 (seconds): temporal_workflow_completed/_failed,
+  temporal_activity_execution_failed, *_schedule_to_start_latency, temporal_workflow_endtoend_latency (labels
+  workflow_type, task_queue, activity_type). Celery queue depth from RabbitMQ's built-in rabbitmq_prometheus
+  (:15692/metrics/detailed?family=queue_coarse_metrics). Celery workers expose no metrics of their own (TODO).
+- Prometheus jobs: services (relabel -> `service` label), temporal-workers (job, job_enrichment, application,
+  scoring :9464), rabbitmq, gateway, prometheus. Alert rules infra/prometheus/alerts.yml (TargetDown, WorkflowFailed,
+  WorkersFallingBehind, ConsumerLagGrowing, MessageDeadLettered, OutboxStuck, TaskQueueBackingUp); UI
+  http://localhost:9090/alerts, no Alertmanager locally.
+- FAILURES (13.5): `EventConsumer.dead_letter` also sends SystemFailure {source: consumer group, kind DEAD_LETTER}
+  DIRECTLY to system.failures (best effort; no transaction to join, DLQ copy is the durable record); never for
+  messages from system.failures itself (no loop); NOT during `replay_from_beginning` (a rebuild re-reads old poison
+  messages: re-reporting made failure counts grow on each rebuild, caught by the rebuild e2e). ApplicationWorkflow:
+  scoring gave up -> `record_score_and_advance(application_id, None, failure)` writes SystemFailure
+  {source application_workflow, WORKFLOW_FAILED} via the outbox with PENDING_MANUAL. Job publishing failures stay
+  JobPublishFailed (already counted by Analytics as source job_publishing_workflow; no double count). Our workflows
+  handle expected failures, so temporal_workflow_failed only shows crashes/bugs.
+- DASHBOARDS (13.6): infra/grafana/dashboards/*.json (service-overview, async-processing = the plan's Workflows +
+  Messaging + 13.8 "Async processing", business), provisioned into Grafana folder "SmartHire" by
+  infra/grafana/provisioning/dashboards/dashboards.yml (re-read every 30 s; JSON in git is the source of truth).
+- 13.8 e2e `test_one_trace_links_an_applications_workflow_and_its_events`: sends its own traceparent through the
+  gateway, then checks Jaeger: gateway -> application -> relay publish -> 3 consumer groups (event ids from the outbox)
+  -> StartWorkflow/RunWorkflow (temporalWorkflowID app-<id>) -> scoring activity -> publish scoring.results ->
+  notification apply_async -> notification-worker run/send_email -> smtp send; and `temporal workflow describe` shows
+  that workflow COMPLETED. Live break-its: Kafka stopped -> identity backlog 1, oldest age 24 s, drained 8 s after
+  restart; poison message -> MessageDeadLettered alert firing within seconds.
+- APISIX exports its spans in batches per nginx worker: the gateway span reaches Jaeger ~5-7 s AFTER the request
+  (downstream spans can arrive first). Tests that look for it must wait for it explicitly.

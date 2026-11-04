@@ -9,8 +9,11 @@ or neither does. A relay (below) then copies committed rows to Kafka and marks t
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime
+
+from opentelemetry.trace import SpanKind
 
 from sqlalchemy import BigInteger, DateTime, Identity, Index, Text, Uuid, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
@@ -21,6 +24,8 @@ from sqlalchemy.sql import column, table
 from smarthire_common.db import session_scope
 from smarthire_common.event_catalog import topic_for
 from smarthire_common.events import EventEnvelope
+from smarthire_common.metrics import OUTBOX_BACKLOG, OUTBOX_OLDEST_AGE, OUTBOX_PUBLISHED
+from smarthire_common.telemetry import context_from_headers, current_context_headers, get_tracer
 
 log = logging.getLogger(__name__)
 
@@ -56,6 +61,7 @@ _outbox = table(
     column("event_type", Text),
     column("payload", JSONB),
     column("headers", JSONB),
+    column("created_at", DateTime(timezone=True)),
     column("published_at", DateTime(timezone=True)),
 )
 
@@ -84,15 +90,26 @@ class OutboxRelay:
 
     send(rows) -> ids of the rows Kafka confirmed. Default: KafkaSender (tests pass a fake)."""
 
-    def __init__(self, send, *, interval: float = 0.2, batch_size: int = 100, error_backoff: float = 2.0) -> None:
+    def __init__(self, send, *, interval: float = 0.2, batch_size: int = 100, error_backoff: float = 2.0,
+                 measure_every: float = 5.0) -> None:
         self._send = send
         self.interval = interval
         self.batch_size = batch_size
         self.error_backoff = error_backoff
+        self.measure_every = measure_every  # how often to update the backlog gauges (a COUNT query)
 
     async def run(self) -> None:
         log.info("outbox relay started")
+        measured_at = 0.0
         while True:
+            if time.monotonic() - measured_at >= self.measure_every:
+                measured_at = time.monotonic()
+                try:
+                    count, oldest_age = await self.measure_backlog()
+                    OUTBOX_BACKLOG.set(count)
+                    OUTBOX_OLDEST_AGE.set(oldest_age)  # alert when this grows: Kafka down or relay stuck
+                except Exception:
+                    log.warning("outbox relay: could not measure the backlog", exc_info=True)
             try:
                 sent, total = await self.publish_batch()
             except Exception:
@@ -129,6 +146,15 @@ class OutboxRelay:
                 )
         return len(sent_ids), len(rows)
 
+    async def measure_backlog(self) -> tuple[int, float]:
+        """(unpublished events, age in seconds of the oldest one; 0 when there are none)."""
+        async with session_scope() as session:
+            count, age = (await session.execute(
+                select(func.count(), func.extract("epoch", func.now() - func.min(_outbox.c.created_at)))
+                .where(_outbox.c.published_at.is_(None))
+            )).one()
+        return count, float(age or 0)
+
 
 class KafkaSender:
     """Sends outbox rows with the JSON Schema serializer and waits for Kafka's confirmations."""
@@ -142,10 +168,11 @@ class KafkaSender:
     def __call__(self, rows) -> list[int]:
         confirmed: list[int] = []
 
-        def on_delivery(row_id: int):
+        def on_delivery(row_id: int, topic: str):
             def callback(err, _msg) -> None:  # called by flush() below, on this same thread
                 if err is None:
                     confirmed.append(row_id)
+                    OUTBOX_PUBLISHED.labels(topic).inc()
                 else:
                     log.warning("outbox relay: row %s not delivered: %s", row_id, err)
 
@@ -159,13 +186,20 @@ class KafkaSender:
                 # row unpublished, keep going: other rows shouldn't wait behind a broken one
                 log.exception("outbox relay: cannot serialize row %s (%s)", row.id, row.event_type)
                 continue
-            self._producer.produce(
-                row.topic,
-                key=row.message_key.encode(),
-                value=value,
-                headers=list((row.headers or {}).items()),
-                on_delivery=on_delivery(row.id),
-            )
+            # A PRODUCER span, CHILD of the code that wrote the event (its context was stored with the row),
+            # and THIS span's context goes into the Kafka headers: consumers continue the trace from here
+            with get_tracer().start_as_current_span(
+                f"publish {row.topic}", context=context_from_headers(row.headers), kind=SpanKind.PRODUCER,
+                attributes={"messaging.system": "kafka", "messaging.destination.name": row.topic,
+                            "messaging.message.id": str(row.payload.get("event_id")), "event_type": row.event_type},
+            ):
+                self._producer.produce(
+                    row.topic,
+                    key=row.message_key.encode(),
+                    value=value,
+                    headers=list(current_context_headers().items()),
+                    on_delivery=on_delivery(row.id, row.topic),
+                )
         # Wait for every confirmation (or failure). message.timeout.ms (10 s) < 15 s, so each message
         # is settled one way or the other before we return
         self._producer.flush(15)

@@ -1,0 +1,603 @@
+{
+  "uid": "smarthire-async",
+  "title": "SmartHire / Async processing",
+  "description": "Kafka vs Temporal (Step 13.8, Appendix F.2). Temporal: one row of panels per workflow type; find one stuck process in the Temporal UI by workflow id. Kafka: no central view, so lag, DLQ, outbox backlog, throughput per consumer group, and traces by event id.",
+  "tags": [
+    "smarthire"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Workflows (Temporal: orchestration)",
+      "collapsed": false,
+      "gridPos": {
+        "w": 24,
+        "h": 1,
+        "x": 0,
+        "y": 0
+      },
+      "panels": [],
+      "id": 1
+    },
+    {
+      "type": "timeseries",
+      "title": "Started / completed per type (5 min)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (workflow_type) (increase(smarthire_workflows_started_total[5m]))",
+          "legendFormat": "started {{workflow_type}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (workflow_type) (increase(temporal_workflow_completed[5m]))",
+          "legendFormat": "completed {{workflow_type}}",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 0,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 2
+    },
+    {
+      "type": "timeseries",
+      "title": "Failed per type (5 min)",
+      "description": "Our workflows HANDLE expected failures (the publishing saga compensates -> job FAILED + JobPublishFailed; scoring gives up -> PENDING_MANUAL + SystemFailure): those are business outcomes, counted in Analytics. A FAILED workflow here is a crash or a bug. Failed ACTIVITY attempts are retried; a steady stream = a dependency is down",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (workflow_type) (increase(temporal_workflow_failed[5m]))",
+          "legendFormat": "{{workflow_type}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (activity_type) (increase(temporal_activity_execution_failed[5m]))",
+          "legendFormat": "activity attempt failed: {{activity_type}}",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 8,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 3
+    },
+    {
+      "type": "timeseries",
+      "title": "Workflow duration p95",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, workflow_type) (rate(temporal_workflow_endtoend_latency_bucket[15m])))",
+          "legendFormat": "{{workflow_type}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 16,
+        "y": 1
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 4
+    },
+    {
+      "type": "timeseries",
+      "title": "Schedule-to-start p95 (are workers keeping up?)",
+      "description": "Time a task waits in its queue before a worker picks it up. Rising = too few workers, or a worker is down",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, task_queue) (rate(temporal_activity_schedule_to_start_latency_bucket[5m])))",
+          "legendFormat": "activities {{task_queue}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, task_queue) (rate(temporal_workflow_task_schedule_to_start_latency_bucket[5m])))",
+          "legendFormat": "workflow tasks {{task_queue}}",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 5
+    },
+    {
+      "type": "timeseries",
+      "title": "Activity duration p95",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, activity_type) (rate(temporal_activity_execution_latency_bucket[15m])))",
+          "legendFormat": "{{activity_type}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 12,
+        "y": 9
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 6
+    },
+    {
+      "type": "row",
+      "title": "Events (Kafka: choreography) - one series per consumer group",
+      "collapsed": false,
+      "gridPos": {
+        "w": 24,
+        "h": 1,
+        "x": 0,
+        "y": 17
+      },
+      "panels": [],
+      "id": 7
+    },
+    {
+      "type": "timeseries",
+      "title": "Consumer lag",
+      "description": "Messages not yet processed. Growing = the group is falling behind or stopped",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (consumer) (smarthire_consumer_lag)",
+          "legendFormat": "{{consumer}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 0,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Events handled/s by outcome",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (consumer, outcome) (rate(smarthire_events_consumed_total[1m]))",
+          "legendFormat": "{{consumer}} {{outcome}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 8,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 9
+    },
+    {
+      "type": "timeseries",
+      "title": "Dead-lettered (1 h)",
+      "description": "Any value > 0 needs a human: inspect <topic>.dlq in Kafka UI",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (consumer, topic) (increase(smarthire_dlq_messages_total[1h]))",
+          "legendFormat": "{{consumer}} {{topic}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 16,
+        "y": 18
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox backlog",
+      "description": "Committed events not yet on Kafka (the services that have an outbox)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "smarthire_outbox_backlog{service=~\"identity|job|candidate|application|scoring\"}",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 0,
+        "y": 26
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 11
+    },
+    {
+      "type": "timeseries",
+      "title": "Oldest unpublished outbox event",
+      "description": "Seconds. Above a few seconds: Kafka down or the relay stuck",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (service) (smarthire_outbox_oldest_age_seconds{service=~\"identity|job|candidate|application|scoring\"})",
+          "legendFormat": "{{service}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 8,
+        "y": 26
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 12
+    },
+    {
+      "type": "timeseries",
+      "title": "Events published/s per topic",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (topic) (rate(smarthire_outbox_published_total[1m]))",
+          "legendFormat": "{{topic}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 16,
+        "y": 26
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 13
+    },
+    {
+      "type": "row",
+      "title": "Background tasks (Celery on RabbitMQ)",
+      "collapsed": false,
+      "gridPos": {
+        "w": 24,
+        "h": 1,
+        "x": 0,
+        "y": 34
+      },
+      "panels": [],
+      "id": 14
+    },
+    {
+      "type": "timeseries",
+      "title": "Queue depth",
+      "description": "Ready = waiting for a worker. Growing = workers stopped or too slow",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_ready{queue=~\"emails|resumes\"})",
+          "legendFormat": "{{queue}} ready",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_unacked{queue=~\"emails|resumes\"})",
+          "legendFormat": "{{queue}} in progress",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "w": 24,
+        "h": 8,
+        "x": 0,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "id": 15
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  }
+}
