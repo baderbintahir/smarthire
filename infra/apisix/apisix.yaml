@@ -8,26 +8,93 @@
 # ---------------------------------------------------------------- upstreams (the services)
 # Services that don't exist yet simply answer 502 until they are added to Compose.
 upstreams:
+# With ONE node per service a health check can't route around a failure: APISIX still sends to the only
+# node (verified: a paused service -> 504 after the read timeout). The checks pay off with replicas
+# (`docker compose up --scale application=2`); until then the read timeout is what bounds a hung service.
   - id: identity
     type: roundrobin
     nodes: { "identity:8001": 1 }
-    timeout: { connect: 2, send: 30, read: 30 }
+    timeout: { connect: 2, send: 10, read: 10 }      # Step 14.1: a hung service costs callers 10 s, not 30
+    checks:                                         # Step 14.2: stop sending to a node that's down
+      active:                                       # poll readiness; also what brings a node BACK
+        type: http
+        http_path: /health/ready
+        timeout: 2
+        healthy: { interval: 2, successes: 1 }
+        unhealthy: { interval: 2, http_failures: 2, tcp_failures: 2, timeouts: 2 }
+      passive:                                      # learn from real traffic between polls
+        healthy: { http_statuses: [200, 201, 202, 204], successes: 3 }
+        # 502/504/refused/timeouts = the node itself is broken. NOT 503: a service answers 503 when one of
+        # ITS dependencies is down, which is no reason to stop routing to it
+        unhealthy: { http_statuses: [502, 504], http_failures: 3, tcp_failures: 2, timeouts: 3 }
   - id: job
     type: roundrobin
     nodes: { "job:8002": 1 }
-    timeout: { connect: 2, send: 30, read: 30 }
+    timeout: { connect: 2, send: 10, read: 10 }      # Step 14.1: a hung service costs callers 10 s, not 30
+    checks:                                         # Step 14.2: stop sending to a node that's down
+      active:                                       # poll readiness; also what brings a node BACK
+        type: http
+        http_path: /health/ready
+        timeout: 2
+        healthy: { interval: 2, successes: 1 }
+        unhealthy: { interval: 2, http_failures: 2, tcp_failures: 2, timeouts: 2 }
+      passive:                                      # learn from real traffic between polls
+        healthy: { http_statuses: [200, 201, 202, 204], successes: 3 }
+        # 502/504/refused/timeouts = the node itself is broken. NOT 503: a service answers 503 when one of
+        # ITS dependencies is down, which is no reason to stop routing to it
+        unhealthy: { http_statuses: [502, 504], http_failures: 3, tcp_failures: 2, timeouts: 3 }
   - id: candidate
     type: roundrobin
     nodes: { "candidate:8004": 1 }
     timeout: { connect: 2, send: 60, read: 60 }      # resume uploads
+    checks:                                         # Step 14.2: stop sending to a node that's down
+      active:                                       # poll readiness; also what brings a node BACK
+        type: http
+        http_path: /health/ready
+        timeout: 2
+        healthy: { interval: 2, successes: 1 }
+        unhealthy: { interval: 2, http_failures: 2, tcp_failures: 2, timeouts: 2 }
+      passive:                                      # learn from real traffic between polls
+        healthy: { http_statuses: [200, 201, 202, 204], successes: 3 }
+        # 502/504/refused/timeouts = the node itself is broken. NOT 503: a service answers 503 when one of
+        # ITS dependencies is down, which is no reason to stop routing to it
+        unhealthy: { http_statuses: [502, 504], http_failures: 3, tcp_failures: 2, timeouts: 3 }
   - id: application
     type: roundrobin
-    nodes: { "application:8005": 1 }
-    timeout: { connect: 2, send: 30, read: 30 }
+    # 2 replicas since Step 14.4, listed by CONTAINER name (Docker DNS; re-resolved every 10 s, so a
+    # recreated replica's new IP is followed). Scaling = add a node here. NOT APISIX's dns discovery:
+    # on 3.19 it caches answers for the record TTL (Docker: 600 s) and ignores dns_resolver_valid, so
+    # it kept routing to dead IPs for minutes after a recreate (found by the gateway tests)
+    nodes: { "smarthire-application-1:8005": 1, "smarthire-application-2:8005": 1 }
+    timeout: { connect: 2, send: 10, read: 10 }      # Step 14.1: a hung service costs callers 10 s, not 30
+    checks:                                         # Step 14.2: stop sending to a node that's down
+      active:                                       # poll readiness; also what brings a node BACK
+        type: http
+        http_path: /health/ready
+        timeout: 2
+        healthy: { interval: 2, successes: 1 }
+        unhealthy: { interval: 2, http_failures: 2, tcp_failures: 2, timeouts: 2 }
+      passive:                                      # learn from real traffic between polls
+        healthy: { http_statuses: [200, 201, 202, 204], successes: 3 }
+        # 502/504/refused/timeouts = the node itself is broken. NOT 503: a service answers 503 when one of
+        # ITS dependencies is down, which is no reason to stop routing to it
+        unhealthy: { http_statuses: [502, 504], http_failures: 3, tcp_failures: 2, timeouts: 3 }
   - id: analytics
     type: roundrobin
     nodes: { "analytics:8008": 1 }
-    timeout: { connect: 2, send: 30, read: 30 }
+    timeout: { connect: 2, send: 10, read: 10 }      # Step 14.1: a hung service costs callers 10 s, not 30
+    checks:                                         # Step 14.2: stop sending to a node that's down
+      active:                                       # poll readiness; also what brings a node BACK
+        type: http
+        http_path: /health/ready
+        timeout: 2
+        healthy: { interval: 2, successes: 1 }
+        unhealthy: { interval: 2, http_failures: 2, tcp_failures: 2, timeouts: 2 }
+      passive:                                      # learn from real traffic between polls
+        healthy: { http_statuses: [200, 201, 202, 204], successes: 3 }
+        # 502/504/refused/timeouts = the node itself is broken. NOT 503: a service answers 503 when one of
+        # ITS dependencies is down, which is no reason to stop routing to it
+        unhealthy: { http_statuses: [502, 504], http_failures: 3, tcp_failures: 2, timeouts: 3 }
   - id: ai_assistant
     type: roundrobin
     nodes: { "ai_assistant:8010": 1 }
@@ -35,7 +102,19 @@ upstreams:
   - id: bff_web
     type: roundrobin
     nodes: { "bff_web:8011": 1 }
-    timeout: { connect: 2, send: 30, read: 30 }
+    timeout: { connect: 2, send: 10, read: 10 }      # Step 14.1: a hung service costs callers 10 s, not 30
+    checks:                                         # Step 14.2: stop sending to a node that's down
+      active:                                       # poll readiness; also what brings a node BACK
+        type: http
+        http_path: /health/ready
+        timeout: 2
+        healthy: { interval: 2, successes: 1 }
+        unhealthy: { interval: 2, http_failures: 2, tcp_failures: 2, timeouts: 2 }
+      passive:                                      # learn from real traffic between polls
+        healthy: { http_statuses: [200, 201, 202, 204], successes: 3 }
+        # 502/504/refused/timeouts = the node itself is broken. NOT 503: a service answers 503 when one of
+        # ITS dependencies is down, which is no reason to stop routing to it
+        unhealthy: { http_statuses: [502, 504], http_failures: 3, tcp_failures: 2, timeouts: 3 }
 
 # ---------------------------------------------------------------- reusable plugin bundles
 plugin_configs:

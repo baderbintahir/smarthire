@@ -35,7 +35,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             issuer=settings.jwt_issuer,
             audience=settings.jwt_audience,
         )
-        init_db(settings.database_url)
+        init_db(settings.database_url, pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow)
         init_redis(settings.redis_url)
         # Identity can't do its job without either: login needs Postgres, and the denylist and
         # login rate limiting (security controls) need Redis

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -276,3 +277,17 @@ def test_token_factory_tokens_verify():
     finally:
         auth.get_redis = original
         auth._config = None
+
+
+async def test_concurrent_first_requests_wait_for_the_one_fetch_in_flight():
+    """Found by the load test (Step 14.4): right after a restart, a burst of requests hit an empty cache.
+    One fetches; the others must WAIT for that fetch, not answer 503 because "a refresh just happened"."""
+    identity = FakeIdentity(("a", KEY_A))
+
+    async def slow(request):
+        await asyncio.sleep(0.2)  # Identity takes a moment to answer
+        return identity.handler(request)
+
+    client = JWKSClient("http://identity/jwks", http_client=httpx.AsyncClient(transport=httpx.MockTransport(slow)))
+    keys = await asyncio.gather(*(client.get_key("a") for _ in range(10)))
+    assert all(key is not None for key in keys) and identity.calls == 1

@@ -60,7 +60,8 @@ def start_worker(settings, *, task_queue: str, workflows: Sequence = (), activit
             client = await connect(settings)
             try:
                 log.info("Temporal worker started on %s", task_queue)
-                await Worker(client, task_queue=task_queue, workflows=list(workflows), activities=list(activities)).run()
+                await Worker(client, task_queue=task_queue, workflows=list(workflows), activities=list(activities),
+                             max_concurrent_activities=settings.temporal_max_concurrent_activities).run()
             except asyncio.CancelledError:
                 raise
             except Exception:

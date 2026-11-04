@@ -25,3 +25,6 @@ secrets/
 .idea/
 .DS_Store
 *.log
+
+# Load test outputs (tokens, results)
+tests/load/.results/

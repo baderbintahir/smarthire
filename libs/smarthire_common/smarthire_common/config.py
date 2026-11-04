@@ -29,6 +29,14 @@ class BaseServiceSettings(BaseSettings):
     temporal_namespace: str = "default"
     temporal_enabled: bool = True  # start the Temporal worker with the app; tests turn it off
     temporal_metrics_bind: str = "0.0.0.0:9464"  # the SDK's Prometheus metrics (Phase 13; scraped inside Compose)
+    # Backpressure (Step 14.3): at most this many activities run at once in this worker; more wait in
+    # Temporal's queue (visible as schedule-to-start latency) instead of overloading the DB or other services
+    temporal_max_concurrent_activities: int = 20
+
+    # --- Resource limits (Step 14.3): sum of all pools must stay under Postgres' max_connections ---
+    db_pool_size: int = 5  # connections kept open per process
+    db_max_overflow: int = 5  # extra connections under load (closed again afterwards)
+    redis_timeout_seconds: float = 2.0  # connect + each command; a HUNG Redis must not hang requests
 
     # --- Background tasks (Phase 10); only used by services with Celery tasks ---
     celery_broker_url: str = "amqp://guest:guest@rabbitmq:5672//"

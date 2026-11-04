@@ -8,6 +8,7 @@ bucket URL would let anyone holding the link read a person's CV, forever, with n
 import asyncio
 import io
 
+import urllib3
 from minio import Minio
 
 _client: Minio | None = None
@@ -18,7 +19,11 @@ _bucket: str | None = None
 def init_storage(endpoint: str, access_key: str, secret_key: str, *, bucket: str, secure: bool,
                  public_endpoint: str | None = None) -> None:
     global _client, _signer, _bucket
-    _client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure)
+    # Timeouts + retries (Step 14.1): minio's default client waits up to 5 MINUTES to connect or read.
+    # Connect 3 s, read 30 s (a 5 MB upload), 3 retries with back-off for connection errors and 5xx
+    http = urllib3.PoolManager(timeout=urllib3.Timeout(connect=3, read=30), maxsize=10,
+                               retries=urllib3.Retry(total=3, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504]))
+    _client = Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=secure, http_client=http)
     # region given: signing is then pure computation (no "which region is this bucket in?" network call)
     _signer = Minio(public_endpoint or endpoint, access_key=access_key, secret_key=secret_key, secure=secure,
                     region="us-east-1")

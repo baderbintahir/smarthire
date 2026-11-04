@@ -332,3 +332,31 @@ async def test_retention_deletes_only_old_published_outbox_rows_and_old_processe
     assert remaining == "recent,unpublished"  # never delete what Kafka hasn't confirmed, however old
     assert await scalar("SELECT count(*) FROM processed_events") == 1
 
+
+async def test_lag_of_partitions_moved_to_another_replica_is_forgotten():
+    from confluent_kafka import TopicPartition
+    from prometheus_client import REGISTRY
+
+    class FakeConsumer:
+        def __init__(self):
+            self.owned = [0, 1]
+
+        def assignment(self):
+            return [TopicPartition("identity.users", p) for p in self.owned]
+
+        def committed(self, partitions, timeout):
+            return [TopicPartition(tp.topic, tp.partition, 5) for tp in partitions]
+
+        def get_watermark_offsets(self, tp, timeout):
+            return 0, 12
+
+    def lag(partition):
+        return REGISTRY.get_sample_value("smarthire_consumer_lag", {"consumer": "lagger", "topic": "identity.users",
+                                                                  "partition": str(partition)})
+
+    consumer, kafka = EventConsumer(name="lagger", topics=[], handlers={}, bootstrap_servers="", schema_registry_url=""), FakeConsumer()
+    await consumer._measure_lag(kafka)
+    assert (lag(0), lag(1)) == (7, 7)
+    kafka.owned = [0]  # a rebalance gave partition 1 to another replica
+    await consumer._measure_lag(kafka)
+    assert (lag(0), lag(1)) == (7, None)

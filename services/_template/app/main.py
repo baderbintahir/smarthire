@@ -19,7 +19,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         # Startup: runs once before the first request
-        init_db(settings.database_url)
+        init_db(settings.database_url, pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow)
         register_readiness_check("database", db_ping_check)
         yield
         # Shutdown: runs once when the server stops

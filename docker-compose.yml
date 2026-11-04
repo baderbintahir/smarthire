@@ -1,6 +1,9 @@
 services:
   postgres:
     image: postgres:16
+    # Step 14.3: room for every pool (6 APIs x (5 + 5 overflow) + 4 worker processes x 2 = 68), psql,
+    # migrations and a second replica of a service. Raise WITH the pools, never instead of sizing them
+    command: ["postgres", "-c", "max_connections=150"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -13,7 +16,7 @@ services:
       NOTIFICATION_DB_PASSWORD: ${NOTIFICATION_DB_PASSWORD}
       ANALYTICS_DB_PASSWORD: ${ANALYTICS_DB_PASSWORD}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"                      # host tools only; never the LAN (Step 14.1 review)
     volumes:
       - pgdata:/var/lib/postgresql/data          # survives `down`, wiped by `down -v`
       - ./infra/postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro  # runs once, on an empty volume
@@ -26,7 +29,7 @@ services:
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"                      # no password locally: localhost only
     volumes:
       - redisdata:/data
     healthcheck:
@@ -101,8 +104,8 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
     ports:
-      - "9000:9000"                                # S3 API
-      - "9001:9001"                                # web console: http://localhost:9001
+      - "127.0.0.1:9000:9000"                      # S3 API (presigned links use localhost:9000)
+      - "127.0.0.1:9001:9001"                      # web console: http://localhost:9001
     volumes:
       - miniodata:/data
     healthcheck:
@@ -171,6 +174,8 @@ services:
       S3_ACCESS_KEY: ${CANDIDATE_S3_ACCESS_KEY}
       S3_SECRET_KEY: ${CANDIDATE_S3_SECRET_KEY}
       CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
+      DB_POOL_SIZE: 2                              # per worker PROCESS: it runs one task at a time
+      DB_MAX_OVERFLOW: 0
     depends_on:
       postgres:
         condition: service_healthy
@@ -192,8 +197,13 @@ services:
       REDIS_URL: redis://redis:6379/0              # token denylist + idempotency keys
       CANDIDATE_URL: http://candidate:8004         # applicant's profile at apply time (user's own token)
       FORWARDED_ALLOW_IPS: 172.30.0.10             # trust X-Forwarded-For only from the gateway
-    ports:
-      - "127.0.0.1:8005:8005"                      # debugging only: clients go through the gateway
+    # Step 14.4: the load test showed ONE Application process saturating one CPU core (Python runs one
+    # thread of Python at a time). Two replicas share the work: APISIX and Prometheus find both through
+    # Docker's DNS (`application` resolves to every replica). Their Kafka consumers split the partitions,
+    # their relays share the outbox (SKIP LOCKED), their Temporal workers poll the same task queue.
+    # No host port: two replicas can't both publish 8005 (debug with `docker compose exec application ...`)
+    deploy:
+      replicas: 2
     depends_on:
       postgres:
         condition: service_healthy
@@ -280,7 +290,10 @@ services:
       context: .
       dockerfile: services/notification/Dockerfile # same image, different command
     command: ["celery", "-A", "app.tasks.celery_app", "worker", "-B", "-Q", "emails", "--concurrency", "2", "--loglevel", "INFO"]
-    environment: *notification-env                 # the same settings as the consumer above
+    environment:
+      <<: *notification-env                        # the same settings as the consumer above, plus:
+      DB_POOL_SIZE: 2                              # per worker PROCESS: it runs one task at a time
+      DB_MAX_OVERFLOW: 0
     depends_on:
       postgres:
         condition: service_healthy

@@ -10,25 +10,28 @@ rule_files:
 
 scrape_configs:
   - job_name: services                     # every FastAPI service: GET /metrics (chassis setup_metrics)
-    static_configs:
-      - targets:
-          - identity:8001
-          - job:8002
-          - job_enrichment:8003
-          - candidate:8004
-          - application:8005
-          - scoring:8006
-          - notification:8007
-          - analytics:8008
-          - bff_web:8011
-    relabel_configs: &service_label        # "identity:8001" -> service="identity" (dashboards group by it)
-      - source_labels: [__address__]
-        regex: "([^:]+):.*"
+    # DNS discovery (Step 14.4): a name resolves to EVERY replica of a service (application runs 2), and
+    # each replica is scraped on its own. Re-resolved every 30 s, so replicas coming and going are followed
+    dns_sd_configs:
+      - { names: [identity], type: A, port: 8001 }
+      - { names: [job], type: A, port: 8002 }
+      - { names: [job_enrichment], type: A, port: 8003 }
+      - { names: [candidate], type: A, port: 8004 }
+      - { names: [application], type: A, port: 8005 }
+      - { names: [scoring], type: A, port: 8006 }
+      - { names: [notification], type: A, port: 8007 }
+      - { names: [analytics], type: A, port: 8008 }
+      - { names: [bff_web], type: A, port: 8011 }
+    relabel_configs: &service_label        # the name looked up -> service="application" (dashboards group by it)
+      - source_labels: [__meta_dns_name]
         target_label: service
 
   - job_name: temporal-workers             # the Temporal SDK's own metrics (chassis temporal.py, :9464)
-    static_configs:
-      - targets: [job:9464, job_enrichment:9464, application:9464, scoring:9464]
+    dns_sd_configs:
+      - { names: [job], type: A, port: 9464 }
+      - { names: [job_enrichment], type: A, port: 9464 }
+      - { names: [application], type: A, port: 9464 }
+      - { names: [scoring], type: A, port: 9464 }
     relabel_configs: *service_label
 
   - job_name: rabbitmq                     # Celery queue depth: messages waiting per queue

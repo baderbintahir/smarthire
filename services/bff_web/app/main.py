@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 from smarthire_common.auth import JWKSClient, KeyProvider, close_auth, init_auth
+from smarthire_common.breaker import CircuitBreaker
 from smarthire_common.errors import register_exception_handlers
 from smarthire_common.health import health_router, register_readiness_check
 from smarthire_common.logging import setup_logging
@@ -19,7 +20,7 @@ from smarthire_common.redis import close_redis, init_redis, redis_ping_check
 from smarthire_common.telemetry import flush_tracing, setup_tracing
 
 from app.api import bff
-from app.clients.downstream import CircuitBreaker, Downstream
+from app.clients.downstream import Downstream
 from app.config import Settings
 
 SERVICES = ("application", "candidate", "job", "scoring", "analytics")

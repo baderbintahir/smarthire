@@ -97,12 +97,12 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 12 Analytics: [x] 12.1 projections · [x] 12.2 consumers · [x] 12.3 metrics API · [x] 12.4 rebuild (analytics 8, events e2e 13: metrics follow actions, rebuild identical)
 - [x] Phase 12B BFF (API composition): [x] 12B.1 scaffold + gateway route · [x] 12B.2 composed application view + recruiter dashboard (bff 11, events e2e 14)
 - [x] Phase 13 Observability: [x] 13.1 jaeger/prometheus/grafana + /metrics · [x] 13.2 OTel chassis · [x] 13.3 async propagation · [x] 13.4 metrics · [x] 13.5 failures topic · [x] 13.6 dashboards · [x] 13.7 gateway telemetry · [x] 13.8 Kafka vs Temporal (chassis 101, all service suites pass, gateway 14, events e2e 15; break-its verified)
-- [ ] Phase 14 Reliability + load tests (tag v0.1-core)
+- [ ] Phase 14 Reliability + load tests (tag v0.1-core): [x] 14.1 failure-path review · [x] 14.2 breakers + APISIX checks · [x] 14.3 backpressure · [x] 14.3b retention jobs · [x] 14.4 load test · [x] 14.5 chaos · [ ] 14.6 checkpoint (doc written; needs the user's screenshots, then tag v0.1-core)
 - [ ] Phase 15 Semantic index
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** Phase 14 (Reliability + load tests).
+**Next step:** finish 14.6 (screenshots in docs/images/, commit, tag v0.1-core), then Phase 15 (Semantic index).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -674,3 +674,45 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   restart; poison message -> MessageDeadLettered alert firing within seconds.
 - APISIX exports its spans in batches per nginx worker: the gateway span reaches Jaeger ~5-7 s AFTER the request
   (downstream spans can arrive first). Tests that look for it must wait for it explicitly.
+- Phase 14 was built in one pass at the user's request.
+- 14.1 TIMEOUTS (chassis): Postgres via init_db (asyncpg connect 5 s, command_timeout 30 s, pool_timeout 10 s; Postgres
+  URLs only, SQLite tests ignore pool args), Redis socket/connect 2 s (`init_redis(url, timeout=)`), Mongo
+  connectTimeoutMS 3000 + socketTimeoutMS 10000, Schema Registry `timeout: 5`. Candidate's MinIO client: urllib3
+  PoolManager (connect 3 s, read 30 s, 3 retries on 5xx). APISIX upstream read 10 s (candidate 60, assistant 300).
+  Chassis errors: dependency outages (SQLAlchemy pool TimeoutError, OperationalError, InterfaceError, redis
+  Connection/TimeoutError, ConnectionError/TimeoutError, pymongo ServerSelectionTimeout/AutoReconnect) -> 503
+  SERVICE_UNAVAILABLE + Retry-After 5 (was 500). Postgres, Redis, MinIO ports now bound to 127.0.0.1 (were 0.0.0.0).
+- 14.2 BREAKERS: CircuitBreaker moved to chassis `breaker.py` (BFF imports it). Application -> Candidate
+  (`HttpCandidateClient`): 5 failures -> open 15 s; only network errors/5xx count (a 4xx is an answer). AI Assistant
+  breakers: Phase 16. APISIX: active (GET /health/ready) + passive (502/504/tcp/timeouts; NOT 503) health checks on
+  every deployed upstream. With ONE node APISIX still sends to it when unhealthy (verified: paused service -> 504
+  after the read timeout); checks matter with replicas. Health status: control API 127.0.0.1:9090/v1/healthcheck
+  inside the gateway container (checkers start on an upstream's first request).
+- 14.3 BACKPRESSURE: settings `db_pool_size` 5 / `db_max_overflow` 5 (every init_db call passes them; Celery workers
+  DB_POOL_SIZE 2, DB_MAX_OVERFLOW 0 per process), Postgres `max_connections=150` (compose command; budget ~68),
+  `temporal_max_concurrent_activities` 20 (start_worker), Kafka consumer `queued.max.messages.kbytes` 16384 (librdkafka
+  has no max.poll.records: we process one message at a time), Celery prefetch 1 + concurrency 2 (unchanged), APISIX
+  limits unchanged (login 30/min/IP, public 120/min/IP, authenticated 300/min/user).
+- 14.3b RETENTION (E.14): chassis `retention.py` (`RetentionJob`, `delete_in_batches` 1000 rows per transaction,
+  `outbox_job` 7 d published only, `processed_events_job` 30 d via ctid, `mongo_outbox_job`, `start_retention(jobs)`:
+  first run 60-90 s after start, then every_seconds (daily; notification_log weekly), metric
+  `smarthire_retention_deleted_total{job}`). Per service `app/maintenance.py` with JOBS (identity: outbox +
+  refresh_tokens expired/revoked > 30 d; job/candidate/application: outbox + processed_events; notification:
+  processed_events + SENT notification_log > 90 d; analytics: processed_events; scoring: Mongo outbox). Started in each
+  lifespan; run now: `docker compose exec <svc> python -m app.maintenance`. Kafka topic retention (7 d default) <
+  processed_events retention (30 d), as it must be.
+- 14.4 LOAD TEST: tests/load/ (setup_data.py direct to services on 127.0.0.1 ports, NOT the gateway: login limit;
+  locustfile.py through the gateway; verify.py; chaos.py), Makefile `load-setup n=`, `load-test u= t=`, `load-verify`,
+  `chaos`. Outputs (tokens!) in tests/load/.results/ (gitignored). Tokens live 15 min: run the load right after setup.
+  Results in docs/part-a-checkpoint.md. FINDINGS -> FIXES: (1) one Application process = one CPU core saturated ->
+  `deploy: replicas: 2` (no host port 8005 any more), APISIX nodes by CONTAINER NAME smarthire-application-1/-2
+  (APISIX dns discovery was tried and dropped: it caches the DNS TTL, 600 s on Docker, ignoring dns_resolver_valid ->
+  dead IPs after a recreate), Prometheus `dns_sd_configs` (service label from __meta_dns_name; every replica scraped,
+  temporal-workers too); (2) JWKSClient race: concurrent first requests after a restart got 503 while one fetch was in
+  flight -> they now wait for it (chassis test); (3) stale consumer-lag gauges after a rebalance -> removed for
+  partitions no longer assigned.
+- 14.5 CHAOS: chaos.py stops kafka, scoring, notification, notification-worker, candidate for 30 s each during the
+  load: 0 errors, all 2500 accepted = in DB, everything converged (lag drained in a few minutes: consumers do ~30-60
+  events/s per group). Candidate outage checked separately: applies 503 fast, same key -> 202 after recovery.
+- ENVIRONMENT: on this network (router DNS 192.168.1.1) the name `ai_assistant` takes ~8 s to fail (other unknown names
+  0.4 s), so gateway test_service_not_deployed_is_json_503 times out; not a code issue.

@@ -26,7 +26,7 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        init_db(settings.database_url)
+        init_db(settings.database_url, pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow)
         init_redis(settings.redis_url)  # token denylist + metrics cache
         init_auth(key_provider or JWKSClient(settings.jwks_url), issuer=settings.jwt_issuer,
                   audience=settings.jwt_audience)

@@ -37,7 +37,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        init_db(settings.database_url)
+        init_db(settings.database_url, pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow)
         init_redis(settings.redis_url)  # token denylist + idempotency keys
         init_auth(
             key_provider or JWKSClient(settings.jwks_url),

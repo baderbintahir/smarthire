@@ -1,6 +1,7 @@
 import json
 import logging
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
@@ -165,3 +166,36 @@ async def test_redis_helpers(monkeypatch):
     await sh_redis.get_redis().set("k", "v")
     assert await sh_redis.get_redis().get("k") == "v"
     await sh_redis.close_redis()
+
+
+@pytest.mark.parametrize("error", [
+    "pool", "redis", "refused",
+])
+def test_dependency_outages_are_503_with_retry_after_not_500(error):
+    import redis.exceptions
+    import sqlalchemy.exc
+
+    raised = {"pool": sqlalchemy.exc.TimeoutError("QueuePool limit reached"),
+              "redis": redis.exceptions.ConnectionError("Error 111 connecting to redis:6379"),
+              "refused": ConnectionRefusedError("connect call failed")}[error]
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/boom")
+    async def boom():
+        raise raised
+
+    r = TestClient(app, raise_server_exceptions=False).get("/boom")
+    assert r.status_code == 503 and r.headers["Retry-After"] == "5"
+    assert r.json()["error"]["code"] == "SERVICE_UNAVAILABLE"
+
+
+def test_a_bug_is_still_a_500():
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/bug")
+    async def bug():
+        raise KeyError("oops")
+
+    assert TestClient(app, raise_server_exceptions=False).get("/bug").status_code == 500

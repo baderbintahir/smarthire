@@ -109,9 +109,38 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def handle_unexpected(request: Request, exc: Exception):
+        if is_dependency_outage(exc):
+            # Not a bug: the DB pool is exhausted or Postgres/Redis/Mongo is unreachable. 503 + Retry-After
+            # tells clients (and load balancers) "temporary, try again", unlike a 500
+            logger.warning("Dependency unavailable: %s: %s", type(exc).__name__, exc)
+            return _error_response(503, "SERVICE_UNAVAILABLE", "A dependency is temporarily unavailable; try again shortly",
+                                   headers={"Retry-After": "5"})
         # Full traceback goes to the logs; the client only gets a generic message + request_id
         logger.exception("Unhandled exception")
         return _error_response(500, "INTERNAL_ERROR", "Internal server error")
+
+
+def _outage_types() -> tuple[type[BaseException], ...]:
+    """Exception types that mean "a dependency is down or overloaded" (Step 14.1). Imported lazily:
+    not every service has PyMongo."""
+    from redis.exceptions import ConnectionError as RedisConnectionError
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+    from sqlalchemy.exc import InterfaceError, OperationalError
+    from sqlalchemy.exc import TimeoutError as PoolTimeoutError  # no free connection in the pool in time
+
+    types: list[type[BaseException]] = [PoolTimeoutError, OperationalError, InterfaceError, RedisConnectionError,
+                                        RedisTimeoutError, ConnectionError, TimeoutError]
+    try:
+        from pymongo.errors import AutoReconnect, ServerSelectionTimeoutError
+
+        types += [ServerSelectionTimeoutError, AutoReconnect]
+    except ImportError:
+        pass
+    return tuple(types)
+
+
+def is_dependency_outage(exc: BaseException) -> bool:
+    return isinstance(exc, _outage_types())
 
 
 def jsonable_details(exc: RequestValidationError) -> list[dict]:

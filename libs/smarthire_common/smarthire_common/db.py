@@ -22,6 +22,15 @@ def init_db(database_url: str, **engine_kwargs) -> AsyncEngine:
     # pool_pre_ping: test a pooled connection before using it, so a DB restart doesn't
     # cause one failed request per stale connection
     engine_kwargs.setdefault("pool_pre_ping", True)
+    if not database_url.startswith("postgresql"):
+        # Tests also use SQLite: it has no connection pool to size, nor these options
+        for key in ("pool_size", "max_overflow"):
+            engine_kwargs.pop(key, None)
+    else:
+        # Wait at most 10 s for a free pooled connection, then fail (503) instead of queueing forever
+        engine_kwargs.setdefault("pool_timeout", 10)
+        # asyncpg: give up connecting after 5 s; a single statement may run 30 s at most
+        engine_kwargs.setdefault("connect_args", {"timeout": 5, "command_timeout": 30})
     _engine = create_async_engine(database_url, **engine_kwargs)
     trace_engine(_engine)  # a span per SQL statement (no-op unless tracing is on)
     # expire_on_commit=False: objects stay readable after commit (lazy reloads

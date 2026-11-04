@@ -25,7 +25,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        init_db(settings.database_url)
+        init_db(settings.database_url, pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow)
         identity = IdentityClient(settings.identity_url)
         register_readiness_check("database", db_ping_check)
         tasks = []

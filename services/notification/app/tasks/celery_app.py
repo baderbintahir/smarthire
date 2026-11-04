@@ -27,7 +27,7 @@ def _init_worker_process(**_kwargs) -> None:
     # Tracing per CHILD process (its export thread must start after the fork). The Celery
     # instrumentation continues the trace of whoever enqueued the task (traceparent in the task headers)
     setup_tracing(settings, service_name=f"{settings.service_name}-worker")
-    init_db(settings.database_url)
+    init_db(settings.database_url, pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow)
 
 
 @worker_process_shutdown.connect

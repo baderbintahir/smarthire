@@ -5,10 +5,10 @@ still checks role and ownership itself (rule 7). A 403/404 from a service is an 
 only "couldn't get an answer" (timeout, connection refused, 5xx, breaker open) counts as unavailable."""
 
 import asyncio
-import time
 from dataclasses import dataclass
 
 import httpx
+from smarthire_common.breaker import CircuitBreaker
 
 
 class Unavailable(Exception):
@@ -19,30 +19,6 @@ class Unavailable(Exception):
 class Reply:
     status: int
     body: dict
-
-
-class CircuitBreaker:
-    """After `failures` failures in a row: OPEN, every call fails at once for `reset_seconds` (no waiting
-    on a timeout per request while the service is down). Then one call is let through: success closes it."""
-
-    def __init__(self, failures: int, reset_seconds: float) -> None:
-        self.max_failures, self.reset_seconds = failures, reset_seconds
-        self.failures, self.opened_at = 0, None
-
-    def allow(self) -> bool:
-        if self.opened_at is None:
-            return True
-        if time.monotonic() - self.opened_at >= self.reset_seconds:
-            return True  # half-open: let this one call test the service
-        return False
-
-    def success(self) -> None:
-        self.failures, self.opened_at = 0, None
-
-    def failure(self) -> None:
-        self.failures += 1
-        if self.failures >= self.max_failures:
-            self.opened_at = time.monotonic()
 
 
 class Downstream:

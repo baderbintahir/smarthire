@@ -99,7 +99,10 @@ class JWKSClient:
     async def get_key(self, kid: str) -> Any | None:
         now = self._clock()
         stale = self._fetched_at is None or now - self._fetched_at >= self.cache_ttl
-        if (stale or kid not in self._keys) and self._may_refresh(now):
+        # Refresh if allowed, OR if another request's refresh is in flight right now: then wait for its
+        # result (_refresh takes the lock, sees the attempt was just made and returns). Without the second
+        # part, a burst of first requests after a restart all got 503 while one fetch was still running
+        if (stale or kid not in self._keys) and (self._may_refresh(now) or self._lock.locked()):
             await self._refresh()
         if not self._keys:
             # Never managed to load any key: we can't tell good tokens from bad ones

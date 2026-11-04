@@ -13,7 +13,10 @@ def init_mongo(url: str, database: str) -> AsyncDatabase:
     """Call once at startup. Each service uses its own database (database per service)."""
     global _client, _db
     # Connecting is lazy: this doesn't fail if Mongo is down, the first query does
-    _client = AsyncMongoClient(url, serverSelectionTimeoutMS=3000, tz_aware=True)
+    # Timeouts (Step 14.1): find a server within 3 s, connect within 3 s, and give up on an answer after
+    # 10 s (the default waits forever on a hung socket)
+    _client = AsyncMongoClient(url, serverSelectionTimeoutMS=3000, connectTimeoutMS=3000, socketTimeoutMS=10_000,
+                               tz_aware=True)
     _db = _client[database]
     return _db
 

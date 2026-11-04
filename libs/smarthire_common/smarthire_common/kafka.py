@@ -52,7 +52,7 @@ def make_producer(bootstrap_servers: str, client_id: str) -> Producer:
 
 
 def make_registry(url: str) -> SchemaRegistryClient:
-    return SchemaRegistryClient({"url": url})
+    return SchemaRegistryClient({"url": url, "timeout": 5})  # seconds per request (Step 14.1)
 
 
 class EventSerializer:
@@ -147,6 +147,7 @@ class EventConsumer:
         self._dlq_producer: Producer | None = None
         self._failure_serializer: EventSerializer | None = None
         self._replaying = False  # set by replay_from_beginning
+        self._lag_labels: set[tuple[str, str, str]] = set()  # partitions this consumer reported lag for
 
     # ---- the loop (needs Kafka) ----
 
@@ -157,6 +158,10 @@ class EventConsumer:
                 "group.id": self.name,  # all replicas of this service share the partitions
                 "enable.auto.commit": False,  # we commit offsets ourselves, after the DB commit
                 "auto.offset.reset": "earliest",  # a brand-new group starts from the oldest event
+                # Backpressure (Step 14.3): librdkafka prefetches in the background; cap that buffer at
+                # 16 MB (default 64 MB). We still handle ONE message at a time (the Java client's
+                # max.poll.records has no librdkafka equivalent: poll() returns one message)
+                "queued.max.messages.kbytes": 16_384,
                 "logger": logging.getLogger("librdkafka"),
             }
         )
@@ -196,12 +201,18 @@ class EventConsumer:
         """LAG = messages in a partition that this group hasn't finished yet (last offset - committed).
         Growing lag = consumers falling behind (slow, stuck, or down): the key Kafka health signal."""
         assignment = await asyncio.to_thread(consumer.assignment)
-        if not assignment:
-            return
-        for tp in await asyncio.to_thread(consumer.committed, assignment, 5):
+        current: set[tuple[str, str, str]] = set()
+        for tp in await asyncio.to_thread(consumer.committed, assignment, 5) if assignment else []:
             low, high = await asyncio.to_thread(consumer.get_watermark_offsets, tp, 5)
             done = tp.offset if tp.offset >= 0 else low  # nothing committed yet: everything still to read
-            CONSUMER_LAG.labels(self.name, tp.topic, str(tp.partition)).set(max(high - done, 0))
+            labels = (self.name, tp.topic, str(tp.partition))
+            CONSUMER_LAG.labels(*labels).set(max(high - done, 0))
+            current.add(labels)
+        # Partitions taken away by a rebalance (another replica owns them now): forget them, or this
+        # replica would keep reporting their LAST value forever (found by the Step 14.5 chaos run)
+        for labels in self._lag_labels - current:
+            CONSUMER_LAG.remove(*labels)
+        self._lag_labels = current
 
     async def replay_from_beginning(self) -> int:
         """Re-read the topics from their FIRST message up to where they end right now, process every
