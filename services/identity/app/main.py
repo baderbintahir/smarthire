@@ -11,8 +11,10 @@ from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
+from smarthire_common.retention import start_retention
 from smarthire_common.telemetry import flush_tracing, setup_tracing
 
+from app import maintenance
 from app.api import auth, internal, jwks, users
 from app.config import Settings
 from app.domain.tokens import load_signing_key
@@ -42,6 +44,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Publishes UserRegistered events from the outbox. Kafka is NOT a readiness check: while
         # Kafka is down, registration still works and events wait in the outbox
         tasks = [start_outbox_relay(settings)] if settings.kafka_enabled else []
+        tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
         await close_auth()

@@ -9,9 +9,11 @@ from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.mongo import close_mongo, init_mongo, mongo_ping_check
 from smarthire_common.mongo_outbox import ensure_outbox_indexes, start_mongo_outbox_relay
+from smarthire_common.retention import start_retention
 from smarthire_common.telemetry import flush_tracing, setup_tracing
 from smarthire_common.temporal import start_worker
 
+from app import maintenance
 from app.config import Settings
 from app.repositories import peers, scores
 from app.workflows.activities import TASK_QUEUE, score_application
@@ -34,6 +36,7 @@ def create_app(settings: Settings | None = None, *, peer_transport=None) -> Fast
             tasks.append(start_worker(settings, task_queue=TASK_QUEUE, activities=[score_application]))
         if settings.kafka_enabled:
             tasks.append(start_mongo_outbox_relay(settings))  # CandidateScored -> Kafka
+        tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
         await peers.close_peers()

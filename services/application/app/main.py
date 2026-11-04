@@ -12,9 +12,11 @@ from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
+from smarthire_common.retention import start_retention
 from smarthire_common.telemetry import flush_tracing, setup_tracing
 from smarthire_common.temporal import start_worker
 
+from app import maintenance
 from app.api import applications
 from app.config import Settings
 from app.events import handlers
@@ -57,6 +59,7 @@ def create_app(
         if settings.temporal_enabled:  # runs ApplicationWorkflow and our own activities (application-tq)
             tasks.append(start_worker(settings, task_queue=APPLICATION_TQ, workflows=[ApplicationWorkflow],
                                       activities=activities.ACTIVITIES))
+        tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
         await app.state.candidates.close()

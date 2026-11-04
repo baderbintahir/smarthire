@@ -9,8 +9,10 @@ from smarthire_common.kafka import start_consumer
 from smarthire_common.logging import setup_logging
 from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
+from smarthire_common.retention import start_retention
 from smarthire_common.telemetry import flush_tracing, setup_tracing
 
+from app import maintenance
 from app.config import Settings
 from app.events import handlers
 from app.repositories.identity_api import IdentityClient
@@ -30,6 +32,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.kafka_enabled:
             tasks = [start_consumer(settings, name=handlers.CONSUMER_NAME, topics=handlers.TOPICS,
                                     handlers=handlers.build_handlers(settings, identity))]
+        tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
         await identity.close()

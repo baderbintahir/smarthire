@@ -242,3 +242,20 @@ def test_tasks_are_configured():
     assert email.send_email.name == "send_email" and email.send_email.max_retries == 20
     assert email.celery_app.conf.task_acks_late
     assert email.celery_app.conf.beat_schedule["requeue-stale-emails"]["schedule"] == 60.0
+
+
+async def test_retention_deletes_only_old_sent_emails(database):
+    from app import maintenance
+
+    async with db.session_scope() as s:
+        for key, status, sent_days_ago in [("old-sent", "SENT", 91), ("recent-sent", "SENT", 10), ("old-failed", "FAILED", None),
+                                           ("old-queued", "QUEUED", None)]:
+            await s.execute(text(
+                "INSERT INTO notification_log (id, notification_key, recipient, template_code, payload, status, attempts, created_at, sent_at) "
+                "VALUES (:id, :key, 'a@example.com', 'JOB_READY', '{}', :status, 1, now() - interval '100 days', "
+                "now() - make_interval(days => :days))"),
+                {"id": uuid.uuid4(), "key": key, "status": status, "days": sent_days_ago})
+    assert await maintenance.run_all(maintenance.JOBS) == {"processed_events": 0, "notification_log": 1}
+    async with db.session_scope() as s:
+        left = (await s.execute(text("SELECT notification_key FROM notification_log ORDER BY 1"))).scalars().all()
+    assert left == ["old-failed", "old-queued", "recent-sent"]  # unsent rows still need the sweeper or a human

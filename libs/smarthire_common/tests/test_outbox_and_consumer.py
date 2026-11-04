@@ -309,3 +309,26 @@ async def test_a_replay_does_not_dead_letter_again(database):
     consumer._replaying = True  # what replay_from_beginning sets (it needs a real Kafka to run)
     await consumer.dead_letter(FakeMessage(b"x"), ValueError("not JSON"))
     assert sent == []  # dead-lettered and reported when it was first read, not on every rebuild
+
+
+# ---------- 14.3b retention ----------
+
+
+async def test_retention_deletes_only_old_published_outbox_rows_and_old_processed_events(database, monkeypatch):
+    from smarthire_common import retention
+
+    monkeypatch.setattr(retention, "BATCH", 2)  # several batches with a handful of rows
+    await add_events(["old1", "old2", "old3", "recent", "unpublished"])
+    async with db.session_scope() as s:
+        await s.execute(text("UPDATE outbox SET published_at = now() - interval '8 days' WHERE message_key LIKE 'old%'"))
+        await s.execute(text("UPDATE outbox SET published_at = now() - interval '6 days' WHERE message_key = 'recent'"))
+        await s.execute(text("UPDATE outbox SET created_at = now() - interval '9 days' WHERE message_key = 'unpublished'"))
+        for days in (31, 31, 29):
+            await s.execute(text("INSERT INTO processed_events (consumer_name, event_id, processed_at) "
+                                 "VALUES ('c', :id, now() - make_interval(days => :d))"), {"id": uuid.uuid4(), "d": days})
+    assert await retention.run_all([retention.outbox_job(), retention.processed_events_job()]) == {
+        "outbox": 3, "processed_events": 2}
+    remaining = await scalar("SELECT string_agg(message_key, ',' ORDER BY id) FROM outbox")
+    assert remaining == "recent,unpublished"  # never delete what Kafka hasn't confirmed, however old
+    assert await scalar("SELECT count(*) FROM processed_events") == 1
+

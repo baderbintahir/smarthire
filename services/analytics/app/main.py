@@ -11,8 +11,10 @@ from smarthire_common.logging import setup_logging
 from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
+from smarthire_common.retention import start_retention
 from smarthire_common.telemetry import flush_tracing, setup_tracing
 
+from app import maintenance
 from app.api import metrics
 from app.config import Settings
 from app.events import handlers
@@ -35,6 +37,7 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
         if settings.kafka_enabled:
             tasks = [start_consumer(settings, name=handlers.CONSUMER_NAME, topics=handlers.TOPICS,
                                     handlers=handlers.HANDLERS)]
+        tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
         await close_auth()
