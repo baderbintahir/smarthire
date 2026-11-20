@@ -18,10 +18,18 @@ TOPICS = ["identity.users", "candidates.profile"]  # the second is our own: Resu
 
 
 async def on_user_registered(session: AsyncSession, event: EventEnvelope) -> None:
-    """A new CANDIDATE gets an empty profile (same id as their user). Other roles: nothing to do."""
-    if event.payload["role"] != "CANDIDATE":
-        return
-    await repo.create_empty(session, uuid.UUID(event.payload["user_id"]))
+    """A new user holding CANDIDATE gets an empty profile (same id as their user). Other roles: nothing to do.
+    `roles` arrived in schema v2 (design v1.1); v1 events (replays) only have the single `role`."""
+    roles = event.payload.get("roles") or [event.payload["role"]]
+    if "CANDIDATE" in roles:
+        await repo.create_empty(session, uuid.UUID(event.payload["user_id"]))
+
+
+async def on_role_granted(session: AsyncSession, event: EventEnvelope) -> None:
+    """Someone (e.g. a recruiter) took the CANDIDATE role later: they get a profile now. create_empty
+    does nothing if one exists, so a granted-revoked-granted user keeps their old profile."""
+    if event.payload["role"] == "CANDIDATE":
+        await repo.create_empty(session, uuid.UUID(event.payload["user_id"]))
 
 
 def build_handlers(settings) -> dict:
@@ -40,4 +48,4 @@ def build_handlers(settings) -> dict:
         except Exception as exc:
             raise RetryLater(f"task queue unavailable: {exc}") from exc
 
-    return {"UserRegistered": on_user_registered, "ResumeUploaded": on_resume_uploaded}
+    return {"UserRegistered": on_user_registered, "RoleGranted": on_role_granted, "ResumeUploaded": on_resume_uploaded}

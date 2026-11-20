@@ -44,7 +44,7 @@ def add_job(database_url):
 @pytest.fixture
 def candidate(tokens):
     user_id = uuid.uuid4()
-    return user_id, tokens.headers(user_id=user_id, role="CANDIDATE")
+    return user_id, tokens.headers(user_id=user_id, role="CANDIDATE", name="Jane Doe")
 
 
 @pytest.fixture
@@ -114,6 +114,24 @@ def test_idempotency_keys_are_per_user(client, candidate, tokens, add_job):
 def test_idempotency_key_is_required(client, candidate, add_job):
     r = client.post("/applications", json={"job_id": add_job()}, headers=candidate[1])
     assert r.status_code == 422
+
+
+def test_nobody_applies_to_their_own_job(client, tokens, add_job, candidates, database_url):
+    """Design v1.1: a recruiter may also hold CANDIDATE, but never apply to a job they posted."""
+    both = uuid.uuid4()
+    headers = tokens.headers(user_id=both, roles=["CANDIDATE", "RECRUITER"], name="Rita Both")
+    r = apply(client, headers, add_job(recruiter_id=both))
+    assert r.status_code == 403 and r.json()["error"]["code"] == "CANNOT_APPLY_TO_OWN_JOB"
+    assert candidates.calls == 0  # refused before calling Candidate
+    ok = apply(client, headers, add_job())  # someone else's job: allowed, with the name from the token
+    assert ok.status_code == 202 and ok.json()["candidate_name"] == "Rita Both"
+    assert db(database_url, "SELECT active_count FROM application_quotas")[0]["active_count"] == 1
+
+
+def test_token_without_a_name_is_asked_to_complete_the_profile(client, tokens, add_job):
+    # Only tokens from before design v1.1 lack "name"
+    r = apply(client, tokens.headers(role="CANDIDATE", name=""), add_job())
+    assert r.status_code == 422 and r.json()["error"]["code"] == "PROFILE_INCOMPLETE"
 
 
 def test_only_candidates_apply(client, recruiter, add_job):

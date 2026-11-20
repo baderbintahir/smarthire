@@ -1,0 +1,35 @@
+{
+  "description": "An admin took a role away (the user's token_version was bumped). Analytics counts role holders.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user_id",
+    "role",
+    "revoked_by"
+  ],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "role": {
+      "type": "string",
+      "enum": [
+        "CANDIDATE",
+        "RECRUITER",
+        "ADMIN"
+      ]
+    },
+    "revoked_by": {
+      "type": "string",
+      "format": "uuid"
+    }
+  },
+  "examples": [
+    {
+      "user_id": "01a1b2c3-0000-7000-8000-000000000001",
+      "role": "RECRUITER",
+      "revoked_by": "01a1b2c3-0000-7000-8000-000000000009"
+    }
+  ]
+}

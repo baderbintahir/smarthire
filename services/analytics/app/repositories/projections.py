@@ -5,7 +5,7 @@ that doesn't exist yet is simply created."""
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import case, update
+from sqlalchemy import case, func, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,15 @@ async def _bump(session: AsyncSession, model, key: dict, column: str = "count", 
 
 async def bump_counter(session: AsyncSession, name: str, by: int = 1) -> None:
     await _bump(session, MetricCounter, {"name": name}, column="value", by=by)
+
+
+async def drop_counter(session: AsyncSession, name: str) -> None:
+    """One less, never below 0. Users registered before events existed (pre-Phase 7) were never
+    counted, so revoking their role must not break ck_metric_counters_value_non_negative (and send
+    the event to the DLQ)."""
+    await session.execute(
+        update(MetricCounter).where(MetricCounter.name == name).values(value=func.greatest(MetricCounter.value - 1, 0))
+    )
 
 
 async def bump_applications_on(session: AsyncSession, day: date) -> None:

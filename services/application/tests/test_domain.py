@@ -23,9 +23,8 @@ def job(status="READY", deadline=None, rules_=None) -> rules.JobFacts:
     return rules.JobFacts(status=status, deadline=deadline, eligibility_rules=rules_ or {}, stages=STAGES)
 
 
-def candidate(name="Jane Doe", years="5", resume=True) -> rules.CandidateFacts:
-    return rules.CandidateFacts(full_name=name, experience_years=Decimal(years) if years is not None else None,
-                                has_resume=resume)
+def candidate(years="5", resume=True) -> rules.CandidateFacts:
+    return rules.CandidateFacts(experience_years=Decimal(years) if years is not None else None, has_resume=resume)
 
 
 # ---------- job open ----------
@@ -44,10 +43,21 @@ def test_unknown_unpublished_closed_or_past_deadline_jobs_are_not_open(facts):
 # ---------- profile + eligibility ----------
 
 
-@pytest.mark.parametrize("facts", [candidate(name="  "), candidate(resume=False)])
-def test_incomplete_profiles_cannot_apply(facts):
+@pytest.mark.parametrize(("facts", "name"), [(candidate(), "  "), (candidate(), None), (candidate(resume=False), "Jane")])
+def test_incomplete_profiles_cannot_apply(facts, name):
     with pytest.raises(ProfileIncompleteError):
-        rules.check_profile(facts)
+        rules.check_profile(facts, name)
+
+
+def test_nobody_applies_to_their_own_job():
+    import uuid
+
+    from app.domain.errors import OwnJobError
+
+    me = uuid.uuid4()
+    rules.check_not_own_job(uuid.uuid4(), me)  # someone else's job: fine
+    with pytest.raises(OwnJobError):
+        rules.check_not_own_job(me, me)
 
 
 @pytest.mark.parametrize(("years", "ok"), [("2", True), ("2.0", True), ("1.9", False), (None, False)])

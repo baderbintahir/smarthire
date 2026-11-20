@@ -1,5 +1,6 @@
 """The one synchronous call Application makes: Candidate's API, at apply time, for the applicant's
-name (the candidate_name snapshot), experience (eligibility) and whether they have a resume.
+experience (eligibility) and whether they have a resume. (The name for the candidate_name snapshot
+comes from the token since design v1.1: Identity owns names.)
 
 The user's OWN token is forwarded, so Candidate applies its usual rules (rule 7): we can only ever
 read the profile of the person who is applying. If Candidate is down, applying fails with 503;
@@ -55,7 +56,6 @@ class HttpCandidateClient:
         profile = response.json()
         years = profile.get("experience_years")
         return CandidateFacts(
-            full_name=profile["full_name"],
             experience_years=Decimal(str(years)) if years is not None else None,
             has_resume=profile.get("active_resume") is not None,
         )

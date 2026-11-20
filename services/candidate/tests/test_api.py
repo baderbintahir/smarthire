@@ -14,7 +14,6 @@ from app.models.candidate import DOCX, PDF
 from tests.test_domain import MINIMAL_DOCX, MINIMAL_PDF
 
 PROFILE = {
-    "full_name": "Jane Doe",
     "headline": "Backend developer",
     "skills": ["Python", " python ", "PostgreSQL"],
     "experience_years": 3.5,
@@ -68,10 +67,11 @@ def test_put_creates_then_updates_the_profile(client, candidate):
     assert body["skills"] == ["python", "postgresql"]  # normalized
     assert body["experience_years"] == 3.5 and body["active_resume"] is None
 
-    r = client.put("/candidates/me", json={"full_name": "Jane Q. Doe"}, headers=headers)
-    assert r.json()["full_name"] == "Jane Q. Doe"
-    assert r.json()["headline"] is None and r.json()["skills"] == []  # PUT replaces the whole profile
-    assert client.get("/candidates/me", headers=headers).json()["full_name"] == "Jane Q. Doe"
+    r = client.put("/candidates/me", json={"headline": "Staff engineer"}, headers=headers)
+    assert r.json()["headline"] == "Staff engineer"
+    assert r.json()["skills"] == [] and r.json()["experience_years"] is None  # PUT replaces the whole profile
+    assert client.get("/candidates/me", headers=headers).json()["headline"] == "Staff engineer"
+    assert "full_name" not in r.json()  # the name lives in Identity (design v1.1)
 
 
 def test_concurrent_first_saves_both_succeed(client, candidate):
@@ -86,12 +86,11 @@ def test_concurrent_first_saves_both_succeed(client, candidate):
 @pytest.mark.parametrize(
     "bad",
     [
-        {"full_name": ""},
-        {"full_name": "Jane", "experience_years": -1},
-        {"full_name": "Jane", "experience_years": 2.25},  # one decimal place, like numeric(4,1)
-        {"full_name": "Jane", "education": [{"institution": "U", "degree": "BSc", "grade": "A"}]},  # unknown key
-        {"full_name": "Jane", "education": [{"institution": "U", "degree": "BSc",
-                                             "start_year": 2020, "end_year": 2019}]},
+        {"experience_years": -1},
+        {"experience_years": 2.25},  # one decimal place, like numeric(4,1)
+        {"education": [{"institution": "U", "degree": "BSc", "grade": "A"}]},  # unknown key
+        {"education": [{"institution": "U", "degree": "BSc", "start_year": 2020, "end_year": 2019}]},
+        {"headline": "x" * 201},
     ],
 )
 def test_invalid_profiles_are_422(client, candidate, bad):

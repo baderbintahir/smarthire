@@ -16,6 +16,10 @@ SCHEMAS_DIR = Path(__file__).parent / "schemas" / "events"
 # relative to each other (all of one job's events, in order, on jobs.lifecycle).
 EVENT_TOPICS: dict[str, str] = {
     "UserRegistered": "identity.users",
+    # Design v1.1: roles as data and the profile on the user, same topic so one user's events stay in order
+    "RoleGranted": "identity.users",
+    "RoleRevoked": "identity.users",
+    "UserProfileUpdated": "identity.users",
     "JobUpdated": "jobs.lifecycle",
     "JobReady": "jobs.lifecycle",
     "JobPublishFailed": "jobs.lifecycle",

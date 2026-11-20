@@ -33,8 +33,9 @@ def sql(query: str) -> str:
 
 async def user(http: httpx.AsyncClient, run: str, n: int | str, role: str) -> tuple[str, str]:
     email = f"load-{run}-{n}@example.com"
-    extra = {"display_name": "Load Recruiter"} if role == "RECRUITER" else {}
-    r = await http.post(f"{IDENTITY}/auth/register", json={"email": email, "password": PASSWORD, "role": role, **extra})
+    name = "Load Recruiter" if role == "RECRUITER" else f"Load Candidate {n}"
+    r = await http.post(f"{IDENTITY}/auth/register",
+                        json={"email": email, "password": PASSWORD, "full_name": name, "roles": [role]})
     r.raise_for_status()
     login = await http.post(f"{IDENTITY}/auth/login", json={"email": email, "password": PASSWORD})
     login.raise_for_status()
@@ -46,7 +47,7 @@ async def candidate(http: httpx.AsyncClient, run: str, n: int, limit: asyncio.Se
         user_id, token = await user(http, run, n, "CANDIDATE")
         auth = {"Authorization": f"Bearer {token}"}
         # The profile is created from UserRegistered (Kafka); PUT also works if the event is late
-        r = await http.put(f"{CANDIDATE}/candidates/me", json={"full_name": f"Load Candidate {n}", "experience_years": 4},
+        r = await http.put(f"{CANDIDATE}/candidates/me", json={"experience_years": 4},
                            headers=auth)
         r.raise_for_status()
         r = await http.post(f"{CANDIDATE}/candidates/me/resumes", files={"file": ("cv.pdf", PDF, "application/pdf")}, headers=auth)

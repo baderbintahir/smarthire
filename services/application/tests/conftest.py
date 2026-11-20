@@ -53,7 +53,7 @@ class FakeCandidates:
         self.calls = 0
 
     def set(self, user_id, **facts) -> None:
-        defaults = {"full_name": "Jane Doe", "experience_years": Decimal("5"), "has_resume": True}
+        defaults = {"experience_years": Decimal("5"), "has_resume": True}
         self.profiles[str(user_id)] = CandidateFacts(**{**defaults, **facts})
 
     async def facts(self, authorization: str) -> CandidateFacts:
@@ -64,7 +64,7 @@ class FakeCandidates:
             raise ServiceUnavailableError("Candidate profiles are unavailable right now; try again shortly")
         # Like the real service: whose profile is decided by the token (already verified by the app)
         user_id = jwt.decode(authorization.removeprefix("Bearer "), options={"verify_signature": False})["sub"]
-        return self.profiles.get(user_id) or CandidateFacts("Jane Doe", Decimal("5"), True)
+        return self.profiles.get(user_id) or CandidateFacts(Decimal("5"), True)
 
     async def close(self) -> None:
         pass

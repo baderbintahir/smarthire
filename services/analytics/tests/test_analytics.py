@@ -114,6 +114,31 @@ async def test_replayed_events_change_nothing(database, consumer):
     assert await numbers() == before
 
 
+async def test_totals_count_role_holders_through_grant_revoke_and_replay(database, consumer):
+    """Design v1.1: a person holding two roles is counted in both totals; grants add, revokes remove;
+    v1 events (single role, replayed by a rebuild) still count; replaying everything changes nothing."""
+    rita, ana, old = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    story = [
+        event("UserRegistered", {"user_id": rita, "role": "RECRUITER", "roles": ["RECRUITER", "CANDIDATE"]}),
+        event("UserRegistered", {"user_id": ana, "role": "CANDIDATE", "roles": ["CANDIDATE"]}),
+        event("UserRegistered", {"user_id": old, "role": "RECRUITER"}),  # v1 event, before roles existed
+        event("RoleGranted", {"user_id": ana, "role": "RECRUITER", "granted_by": None}),
+        event("RoleGranted", {"user_id": ana, "role": "ADMIN", "granted_by": rita}),  # admins aren't counted
+        event("RoleRevoked", {"user_id": rita, "role": "CANDIDATE", "revoked_by": rita}),
+    ]
+    await feed(consumer, *story)
+    m = await numbers()
+    assert (m["total_candidates"], m["total_recruiters"]) == (1, 3)  # ana | rita, old, ana
+    await feed(consumer, *story)  # redelivered: processed_events skips every one
+    assert await numbers() == m
+
+
+async def test_revoking_a_role_never_counted_stays_at_zero(database, consumer):
+    # A user from before events existed: their registration was never counted
+    await feed(consumer, event("RoleRevoked", {"user_id": str(uuid.uuid4()), "role": "RECRUITER", "revoked_by": str(uuid.uuid4())}))
+    assert (await numbers())["total_recruiters"] == 0
+
+
 async def test_application_before_its_job_ready_still_counts_once(database, consumer):
     """Different topics have no order between them: JobReady may be processed after an application."""
     job_id = str(uuid.uuid4())

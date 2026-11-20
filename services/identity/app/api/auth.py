@@ -16,6 +16,7 @@ from app.api.deps import (
     require_role,
 )
 from app.api.users import to_user_out
+from app.repositories import users as users_repo
 from app.config import Settings
 from app.domain.tokens import SigningKey
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserOut
@@ -49,15 +50,15 @@ def _clear_refresh_cookie(response: Response, settings: Settings) -> None:
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=UserOut)
 async def register(body: RegisterRequest, session: AsyncSession = Depends(get_session)):
-    user, profile = await registration.register_user(
+    user, roles = await registration.register_user(
         session,
         email=body.email,
         password=body.password,
-        role=body.role,
-        display_name=body.display_name,
-        company=body.company,
+        full_name=body.full_name,
+        roles=body.roles,
+        current_company=body.current_company,
     )
-    return to_user_out(user, profile)
+    return to_user_out(user, sorted(roles, key=users_repo.ROLE_IDS.get))  # same order as everywhere else
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -66,12 +67,14 @@ async def login(
     request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
+    redis: Redis = Depends(get_redis),
     limiter: LoginRateLimiter = Depends(get_login_rate_limiter),
     key: SigningKey = Depends(get_signing_key),
     settings: Settings = Depends(get_settings),
 ):
     issued = await sessions.login(
         session,
+        redis,
         limiter,
         email=body.email,
         password=body.password,
@@ -92,28 +95,29 @@ async def refresh(
     request: Request,
     response: Response,
     session: AsyncSession = Depends(get_session),
+    redis: Redis = Depends(get_redis),
     key: SigningKey = Depends(get_signing_key),
     settings: Settings = Depends(get_settings),
 ):
     issued = await sessions.refresh(
         session,
+        redis,
         refresh_token=request.cookies.get(settings.refresh_cookie_name),
-        user_agent=request.headers.get("user-agent"),
         key=key,
         settings=settings,
     )
-    _set_refresh_cookie(response, issued.refresh_token, settings)  # rotated: the old one is now used
+    _set_refresh_cookie(response, issued.refresh_token, settings)  # rotated: the old secret is now dead
     return TokenResponse(access_token=issued.access_token, expires_in=issued.expires_in)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
     request: Request,
-    session: AsyncSession = Depends(get_session),
+    redis: Redis = Depends(get_redis),
     settings: Settings = Depends(get_settings),
 ):
     # No access token required: logging out must work even after the access token expired
-    await sessions.logout(session, refresh_token=request.cookies.get(settings.refresh_cookie_name))
+    await sessions.logout(redis, refresh_token=request.cookies.get(settings.refresh_cookie_name))
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     _clear_refresh_cookie(response, settings)
     return response

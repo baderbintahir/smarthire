@@ -5,7 +5,6 @@ every service (chassis verify_token) READ them, so a revoked token is stopped at
 
 import time
 import uuid
-from datetime import UTC, datetime
 
 from redis.asyncio import Redis
 from redis.exceptions import RedisError
@@ -13,7 +12,7 @@ from smarthire_common.auth import denylist_key, revoked_before_key  # one key fo
 from smarthire_common.errors import ConflictError, NotFoundError, ServiceUnavailableError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.repositories import refresh_tokens as tokens_repo
+from app.repositories import sessions as sessions_repo
 from app.repositories import users as users_repo
 
 # Revocation keys must outlive every token they cover: max token lifetime + verifier leeway
@@ -45,9 +44,9 @@ async def suspend_user(
     if user is None:
         raise NotFoundError("User not found")
     await users_repo.set_status(session, user_id, "SUSPENDED")
-    await tokens_repo.revoke_all_for_user(session, user_id, datetime.now(UTC))  # no new access tokens
     await users_repo.bump_token_version(session, user_id)
-    # Redis BEFORE commit: if the commit then fails, the tokens are revoked but the user isn't
-    # suspended (safe direction). The other order could leave a suspended user with live tokens.
+    # Redis BEFORE commit: if the commit then fails, sessions and tokens are revoked but the user
+    # isn't suspended (safe direction). The other order could leave a suspended user with live tokens.
+    await sessions_repo.delete_all_for_user(redis, str(user_id))  # no new access tokens via refresh
     await revoke_all_access_tokens(redis, user_id=user_id, ttl_seconds=ttl_seconds)
     await session.commit()

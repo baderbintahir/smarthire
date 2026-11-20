@@ -192,11 +192,14 @@ async def verify_token(token: str) -> dict:
             algorithms=[ALGORITHM],  # pinned: never trust the token's own "alg" header
             issuer=config.issuer,
             audience=config.audience,
-            options={"require": ["exp", "iat", "sub", "jti", "iss", "aud", "role"]},
+            # "roles" (an array, design v1.1) is checked below: jwt's "require" only tests presence
+            options={"require": ["exp", "iat", "sub", "jti", "iss", "aud", "roles"]},
             leeway=10,  # tolerate 10 s of clock skew between machines
         )
     except jwt.InvalidTokenError:
         raise invalid from None
+    if roles_of(claims) is None:
+        raise invalid
 
     try:
         # One round trip for both revocation keys
@@ -215,15 +218,29 @@ async def verify_token(token: str) -> dict:
     return claims
 
 
+def roles_of(claims: dict) -> tuple[str, ...] | None:
+    """The token's roles as a tuple, or None if the claim is missing or malformed. Tokens from
+    before design v1.1 (a single "role") are rejected: they expired long ago anyway (15 min)."""
+    roles = claims.get("roles")
+    if not isinstance(roles, list) or not roles or not all(isinstance(r, str) for r in roles):
+        return None
+    return tuple(roles)
+
+
 # ---------- FastAPI dependencies ----------
 
 
 @dataclass(frozen=True)
 class CurrentUser:
     user_id: uuid.UUID
-    role: str
+    roles: tuple[str, ...]  # one account can hold several roles (design v1.1)
     jti: str
     claims: dict = field(repr=False, compare=False)  # everything else, e.g. "tv" for Identity
+    name: str | None = None  # the "name" claim (users.full_name); None in legacy tokens
+
+    def has_role(self, *roles: str) -> bool:
+        """True if the user holds ANY of the given roles."""
+        return any(role in self.roles for role in roles)
 
 
 # auto_error=False: we raise our own UnauthorizedError so the body has our standard shape
@@ -240,7 +257,8 @@ async def get_current_user(
         user_id = uuid.UUID(claims["sub"])
     except ValueError:
         raise UnauthorizedError("Invalid or expired token") from None
-    return CurrentUser(user_id=user_id, role=claims["role"], jti=claims["jti"], claims=claims)
+    return CurrentUser(user_id=user_id, roles=roles_of(claims), jti=claims["jti"], claims=claims,
+                       name=claims.get("name"))
 
 
 async def get_optional_user(
@@ -255,11 +273,12 @@ async def get_optional_user(
 
 
 def require_role(*roles: str, user_dependency: Callable = get_current_user):
-    """`Depends(require_role("RECRUITER", "ADMIN"))`. user_dependency lets a service add its own
-    checks on top of get_current_user (Identity does) and still reuse this."""
+    """`Depends(require_role("RECRUITER", "ADMIN"))`: passes if the user holds ANY of these roles.
+    user_dependency lets a service add its own checks on top of get_current_user (Identity does)
+    and still reuse this."""
 
     async def checker(user: CurrentUser = Depends(user_dependency)) -> CurrentUser:
-        if user.role not in roles:
+        if not user.has_role(*roles):
             raise ForbiddenError("You do not have permission to do this")
         return user
 

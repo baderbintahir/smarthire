@@ -1,0 +1,1683 @@
+{
+  "info": {
+    "_postman_id": "357079a5-f21a-45aa-8728-8a5dcef02ccd",
+    "name": "SmartHire API (via gateway)",
+    "description": "SmartHire public API through the Apache APISIX gateway (`{{baseUrl}}` = http://localhost:8000/api; the gateway strips `/api`). Folders 1\u20138 follow the demo flow; folder 9 calls services directly and is not exposed publicly.\n\n**Authentication:** all non-public routes need `Authorization: Bearer <JWT>` (RS256). The gateway verifies the token and checks revocation.\n\n**Rate limits:**\n- Login: 30/min per IP\n- Public routes (shared): 120/min per IP\n- Authenticated routes: 300/min per user\n- A 429 response carries a `Retry-After` header.\n\n**Error response shape (all errors):**\n```json\n{\"error\": {\"code\": \"...\", \"message\": \"...\", \"request_id\": \"...\", \"details\": {}}}\n```\n`details` is optional.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1 Auth",
+      "item": [
+        {
+          "name": "Register (candidate)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/identity/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Role: public (no token). Body: `full_name` (required), `current_company` (optional), `roles` (one or both of CANDIDATE, RECRUITER; never ADMIN).\nSuccess: 201 Created, body `{id, full_name, current_company, roles, ...}`. Saves `id` into `candidateId`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{candidateEmail}}\",\n  \"password\": \"{{password}}\",\n  \"full_name\": \"Ali Khan\",\n  \"roles\": [\n    \"CANDIDATE\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('candidateId', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Register (recruiter)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/identity/auth/register",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "auth",
+                "register"
+              ]
+            },
+            "description": "Role: public (no token). Same body as any registration: `full_name`, optional `current_company` (current employer), `roles`.\nSuccess: 201 Created.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{recruiterEmail}}\",\n  \"password\": \"{{password}}\",\n  \"full_name\": \"Jane Recruiter\",\n  \"current_company\": \"Acme\",\n  \"roles\": [\n    \"RECRUITER\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Login (candidate)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/identity/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Role: public (no token). Rate limit: 30/min per IP.\nSuccess: 200 OK, body `{access_token, ...}` and sets the httpOnly, Secure `refresh_token` cookie (path `/api/identity/auth`). Saves `access_token` into `candidateToken`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{candidateEmail}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('candidateToken', body.access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login (recruiter)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/identity/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "auth",
+                "login"
+              ]
+            },
+            "description": "Role: public (no token). Rate limit: 30/min per IP.\nSuccess: 200 OK, body `{access_token, ...}` and sets the httpOnly, Secure `refresh_token` cookie (path `/api/identity/auth`). Saves `access_token` into `recruiterToken`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{recruiterEmail}}\",\n  \"password\": \"{{password}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.collectionVariables.set('recruiterToken', body.access_token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh access token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/identity/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Role: public; authenticated by the httpOnly, Secure `refresh_token` cookie (path `/api/identity/auth`) set by Login. Postman's cookie jar keeps and sends it automatically; the cookie belongs to the most recent Login.\nSuccess: 200 OK, new `access_token`.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Get current user",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/identity/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Role: any authenticated user (uses `candidateToken`).\nSuccess: 200 OK."
+          }
+        },
+        {
+          "name": "Update my name or employer",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/identity/users/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "users",
+                "me"
+              ]
+            },
+            "description": "Role: any authenticated user (uses `candidateToken`). Send only the fields to change; `current_company: null` clears it.\nSuccess: 200 OK; emits `UserProfileUpdated` (field names only). The token's `name` claim changes on the next refresh.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"full_name\": \"Ali Khan\",\n  \"current_company\": \"Freelance\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Recruiter adds the CANDIDATE role",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/identity/users/me/roles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "users",
+                "me",
+                "roles"
+              ]
+            },
+            "description": "Role: any authenticated user (uses `recruiterToken`). Adds CANDIDATE or RECRUITER to my own account (never ADMIN).\nSuccess: 201 Created (409 ROLE_ALREADY_HELD on a second run). Emits `RoleGranted`; Candidate creates the profile. Then run the next request: the current token does not have the new role yet.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"CANDIDATE\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{recruiterToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created (409 if already held)', () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh recruiter token (after adding a role)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/identity/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "Role: public; uses the refresh cookie of the MOST RECENT login, so run \"Login (recruiter)\" before \"Recruiter adds the CANDIDATE role\".\nSuccess: 200 OK. Saves `access_token` into `recruiterToken`; its `roles` claim now lists CANDIDATE and RECRUITER.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 OK', () => pm.response.to.have.status(200));",
+                  "const token = pm.response.json().access_token;",
+                  "const claims = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));",
+                  "pm.test('token has both roles', () => pm.expect(claims.roles).to.include.members(['CANDIDATE', 'RECRUITER']));",
+                  "pm.collectionVariables.set('recruiterToken', token);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "JWKS",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/identity/.well-known/jwks.json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                ".well-known",
+                "jwks.json"
+              ]
+            },
+            "description": "Role: public (no token). Identity's public signing keys.\nSuccess: 200 OK.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "OpenID configuration",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/identity/.well-known/openid-configuration",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                ".well-known",
+                "openid-configuration"
+              ]
+            },
+            "description": "Role: public (no token).\nSuccess: 200 OK.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/identity/auth/logout",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "auth",
+                "logout"
+              ]
+            },
+            "description": "Role: public; authenticated by the httpOnly, Secure `refresh_token` cookie (path `/api/identity/auth`) set by Login. Postman's cookie jar keeps and sends it automatically.\nSuccess: 204 No Content. Demo: run at the end.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Logout all sessions",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/identity/auth/logout-all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "auth",
+                "logout-all"
+              ]
+            },
+            "description": "Role: any authenticated user (uses `candidateToken`). Revokes all sessions.\nSuccess: 204 No Content. Demo: run at the end."
+          }
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{candidateToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "2 Jobs (recruiter)",
+      "item": [
+        {
+          "name": "Create job",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "jobs"
+              ]
+            },
+            "description": "Role: RECRUITER.\nSuccess: 201 Created, job in status DRAFT. Saves `id` into `jobId`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Senior Backend Engineer\",\n  \"description\": \"Build and operate Python microservices.\",\n  \"location\": \"Islamabad\",\n  \"employment_type\": \"FULL_TIME\",\n  \"required_skills\": [\n    \"python\",\n    \"fastapi\",\n    \"postgresql\"\n  ],\n  \"eligibility_rules\": {\n    \"min_experience_years\": 2\n  },\n  \"application_limit\": 100,\n  \"deadline\": \"2026-12-31T23:59:59Z\",\n  \"stages\": [\n    \"Screening\",\n    \"Interview\",\n    \"Offer\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('jobId', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List my jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/jobs?mine=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "mine",
+                  "value": "true"
+                },
+                {
+                  "key": "status",
+                  "value": "DRAFT",
+                  "disabled": true
+                },
+                {
+                  "key": "employment_type",
+                  "value": "FULL_TIME",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "disabled": true
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Role: RECRUITER (`mine=true` returns the recruiter's own jobs, including drafts).\nSuccess: 200 OK, `{items, next_cursor}`."
+          }
+        },
+        {
+          "name": "Get job",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/jobs/{{jobId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "jobs",
+                "{{jobId}}"
+              ]
+            },
+            "description": "Role: public for READY/CLOSED jobs; owner otherwise (uses `recruiterToken`).\nSuccess: 200 OK."
+          }
+        },
+        {
+          "name": "Update job",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/jobs/{{jobId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "jobs",
+                "{{jobId}}"
+              ]
+            },
+            "description": "Role: RECRUITER (owner). Same body as Create plus `version` (optimistic lock).\nSuccess: 200 OK.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Senior Backend Engineer\",\n  \"description\": \"Build and operate Python microservices with Kafka.\",\n  \"location\": \"Islamabad\",\n  \"employment_type\": \"FULL_TIME\",\n  \"required_skills\": [\n    \"python\",\n    \"fastapi\",\n    \"postgresql\"\n  ],\n  \"eligibility_rules\": {\n    \"min_experience_years\": 2\n  },\n  \"application_limit\": 100,\n  \"deadline\": \"2026-12-31T23:59:59Z\",\n  \"stages\": [\n    \"Screening\",\n    \"Interview\",\n    \"Offer\"\n  ],\n  \"version\": 1\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Publish job",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/jobs/{{jobId}}/publish",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "jobs",
+                "{{jobId}}",
+                "publish"
+              ]
+            },
+            "description": "Role: RECRUITER (owner).\nSuccess: 202 Accepted; status PROCESSING, then READY when the publishing workflow completes."
+          }
+        },
+        {
+          "name": "List jobs (public)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/jobs",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "employment_type",
+                  "value": "FULL_TIME",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "disabled": true
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Role: public (no token).\nSuccess: 200 OK, `{items, next_cursor}`.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Close job",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/jobs/{{jobId}}/close",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "jobs",
+                "{{jobId}}",
+                "close"
+              ]
+            },
+            "description": "Role: RECRUITER (owner).\nSuccess: 200 OK. Demo: run after folder 5."
+          }
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{recruiterToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "3 Candidate profile & resume",
+      "item": [
+        {
+          "name": "Get my profile",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/candidates/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "candidates",
+                "me"
+              ]
+            },
+            "description": "Role: CANDIDATE.\nSuccess: 200 OK."
+          }
+        },
+        {
+          "name": "Update my profile",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/candidates/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "candidates",
+                "me"
+              ]
+            },
+            "description": "Role: CANDIDATE.\nSuccess: 200 OK.\nNo `full_name` here: the name lives in Identity (PATCH /identity/users/me).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"headline\": \"Backend developer\",\n  \"skills\": [\n    \"python\",\n    \"fastapi\",\n    \"postgresql\"\n  ],\n  \"experience_years\": 3,\n  \"education\": [\n    {\n      \"institution\": \"NUST\",\n      \"degree\": \"BS\",\n      \"field\": \"Computer Science\",\n      \"start_year\": 2017,\n      \"end_year\": 2021\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Upload resume",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/candidates/me/resumes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "candidates",
+                "me",
+                "resumes"
+              ]
+            },
+            "description": "Role: CANDIDATE. form-data field `file` (PDF or DOCX, max 5 MB).\nSuccess: 202 Accepted; the resume is parsed in the background.",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "List my resumes",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/candidates/me/resumes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "candidates",
+                "me",
+                "resumes"
+              ]
+            },
+            "description": "Role: CANDIDATE.\nSuccess: 200 OK."
+          }
+        },
+        {
+          "name": "Get candidate",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/candidates/{{candidateId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "candidates",
+                "{{candidateId}}"
+              ]
+            },
+            "description": "Role: the candidate themselves, RECRUITER, or ADMIN (uses `candidateToken`).\nSuccess: 200 OK."
+          }
+        },
+        {
+          "name": "Get resume download link",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/candidates/{{candidateId}}/resume/link",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "candidates",
+                "{{candidateId}}",
+                "resume",
+                "link"
+              ]
+            },
+            "description": "Role: the candidate themselves, RECRUITER, or ADMIN (uses `candidateToken`).\nSuccess: 200 OK, `{url, expires_in}` (presigned URL, valid 5 minutes)."
+          }
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{candidateToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "4 Applications (candidate)",
+      "item": [
+        {
+          "name": "Apply",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/applications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "applications"
+              ]
+            },
+            "description": "Role: CANDIDATE. Header `Idempotency-Key` required; the pre-request script generates a fresh `{{$guid}}` and stores it in `idempotencyKey`.\nSuccess: 202 Accepted. Saves `id` into `applicationId`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job_id\": \"{{jobId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const key = pm.variables.replaceIn('{{$guid}}');",
+                  "pm.collectionVariables.set('idempotencyKey', key);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('202 Accepted', () => pm.response.to.have.status(202));",
+                  "pm.collectionVariables.set('applicationId', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Apply again (same key)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/applications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "applications"
+              ]
+            },
+            "description": "Role: CANDIDATE. Reuses the first Apply request's `Idempotency-Key` (stored in `idempotencyKey` by that request's pre-request script) instead of generating a new one. The service returns the same application as the first call.\nSuccess: 202 Accepted (same response as the first Apply).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job_id\": \"{{jobId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Apply to my own job (blocked)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/applications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "applications"
+              ]
+            },
+            "description": "Role: CANDIDATE, but uses `recruiterToken` after \"Recruiter adds the CANDIDATE role\" + \"Refresh recruiter token\": the recruiter now holds CANDIDATE and tries to apply to `jobId`, which they posted.\nExpected: 403 `CANNOT_APPLY_TO_OWN_JOB`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"job_id\": \"{{jobId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{recruiterToken}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('idempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('403 Forbidden', () => pm.response.to.have.status(403));",
+                  "pm.test('own-job error code', () => pm.expect(pm.response.json().error.code).to.eql('CANNOT_APPLY_TO_OWN_JOB'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List my applications",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/applications/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "applications",
+                "me"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "disabled": true
+                },
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Role: CANDIDATE.\nSuccess: 200 OK."
+          }
+        },
+        {
+          "name": "Get application",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/applications/{{applicationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "applications",
+                "{{applicationId}}"
+              ]
+            },
+            "description": "Role: the applicant or the job owner (uses `candidateToken`).\nSuccess: 200 OK, includes stage history."
+          }
+        },
+        {
+          "name": "Withdraw application",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/applications/{{applicationId}}/withdraw",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "applications",
+                "{{applicationId}}",
+                "withdraw"
+              ]
+            },
+            "description": "Role: CANDIDATE (the applicant).\nSuccess: 200 OK. Demo: run after folder 5."
+          }
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{candidateToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "5 Applications (recruiter)",
+      "item": [
+        {
+          "name": "Recruiter board",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/jobs/{{jobId}}/applications",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "jobs",
+                "{{jobId}}",
+                "applications"
+              ],
+              "query": [
+                {
+                  "key": "stage",
+                  "value": "Screening",
+                  "disabled": true
+                },
+                {
+                  "key": "limit",
+                  "value": "20",
+                  "disabled": true
+                },
+                {
+                  "key": "offset",
+                  "value": "0",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "Role: RECRUITER (job owner). Routed by the gateway to the Application service.\nSuccess: 200 OK."
+          }
+        },
+        {
+          "name": "Change stage",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/applications/{{applicationId}}/stage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "applications",
+                "{{applicationId}}",
+                "stage"
+              ]
+            },
+            "description": "Role: RECRUITER (job owner). `version` is the optimistic lock.\nSuccess: 200 OK.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"to_stage\": \"Interview\",\n  \"version\": 1,\n  \"reason\": \"Strong skills match\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Add note",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/applications/{{applicationId}}/notes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "applications",
+                "{{applicationId}}",
+                "notes"
+              ]
+            },
+            "description": "Role: RECRUITER (job owner).\nSuccess: 201 Created.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"Good communication in the first call.\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "Make decision",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/applications/{{applicationId}}/decision",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "applications",
+                "{{applicationId}}",
+                "decision"
+              ]
+            },
+            "description": "Role: RECRUITER (job owner). `decision` is HIRED or REJECTED; `version` is the optimistic lock.\nSuccess: 200 OK.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"decision\": \"HIRED\",\n  \"version\": 2,\n  \"reason\": \"Passed all stages\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          }
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{recruiterToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "6 BFF screens",
+      "item": [
+        {
+          "name": "Application detail screen",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/bff/applications/{{applicationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bff",
+                "applications",
+                "{{applicationId}}"
+              ]
+            },
+            "description": "Role: the applicant or the job owner (uses `recruiterToken`).\nSuccess: 200 OK, `{application, candidate, score, resume_download, degraded: [..]}`."
+          }
+        },
+        {
+          "name": "Recruiter dashboard",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/bff/recruiter/dashboard",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "bff",
+                "recruiter",
+                "dashboard"
+              ]
+            },
+            "description": "Role: RECRUITER.\nSuccess: 200 OK, `{jobs, metrics, degraded}`."
+          }
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{recruiterToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "7 Analytics",
+      "item": [
+        {
+          "name": "Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/analytics/metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "analytics",
+                "metrics"
+              ]
+            },
+            "description": "Role: RECRUITER or ADMIN (uses `recruiterToken`).\nSuccess: 200 OK."
+          }
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{recruiterToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "8 Admin",
+      "item": [
+        {
+          "name": "Revoke access token (by jti)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/identity/auth/revoke/:jti",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "auth",
+                "revoke",
+                ":jti"
+              ],
+              "variable": [
+                {
+                  "key": "jti",
+                  "value": "",
+                  "description": "jti claim of the access token to revoke"
+                }
+              ]
+            },
+            "description": "Role: ADMIN.\nSuccess: 204 No Content."
+          }
+        },
+        {
+          "name": "Suspend user",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/identity/users/{{candidateId}}/suspend",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "users",
+                "{{candidateId}}",
+                "suspend"
+              ]
+            },
+            "description": "Role: ADMIN. Uses `candidateId` (equal to the Identity user id) as the target.\nSuccess: 204 No Content."
+          }
+        },
+        {
+          "name": "Grant a role",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/identity/users/{{candidateId}}/roles",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "users",
+                "{{candidateId}}",
+                "roles"
+              ]
+            },
+            "description": "Role: ADMIN. Grants any role (ADMIN included) to `candidateId`.\nSuccess: 201 Created (409 ROLE_ALREADY_HELD). Emits `RoleGranted`.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"RECRUITER\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 Created (409 if already held)', () => pm.expect(pm.response.code).to.be.oneOf([201, 409]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Revoke a role",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/identity/users/{{candidateId}}/roles/RECRUITER",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "identity",
+                "users",
+                "{{candidateId}}",
+                "roles",
+                "RECRUITER"
+              ]
+            },
+            "description": "Role: ADMIN. Takes the role away and bumps `token_version` + sets `revoked_before`: the user's current tokens stop working everywhere; they log in again or refresh.\nSuccess: 204 No Content (404 ROLE_NOT_HELD; 409 LAST_ROLE if it is their only role). Emits `RoleRevoked`."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 No Content', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{adminToken}}",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "9 Internal (service-to-service, NOT via gateway)",
+      "item": [
+        {
+          "name": "Identity: user contact",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8001/internal/users/{{candidateId}}/contact",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8001",
+              "path": [
+                "internal",
+                "users",
+                "{{candidateId}}",
+                "contact"
+              ]
+            },
+            "description": "Internal service-to-service endpoint. Not exposed through the gateway; no token. Called by Notification.\nSuccess: 200 OK.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Candidate: resume for scoring",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8004/internal/candidates/{{candidateId}}/resume",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8004",
+              "path": [
+                "internal",
+                "candidates",
+                "{{candidateId}}",
+                "resume"
+              ]
+            },
+            "description": "Internal service-to-service endpoint. Not exposed through the gateway; no token. Called by Scoring.\nSuccess: 200 OK.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Job Enrichment: structured job",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8003/jobs/{{jobId}}/structured",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8003",
+              "path": [
+                "jobs",
+                "{{jobId}}",
+                "structured"
+              ]
+            },
+            "description": "Internal service-to-service endpoint. Not exposed through the gateway; no token.\nSuccess: 200 OK.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Job Enrichment: search jobs",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8003/search/jobs?q=python",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8003",
+              "path": [
+                "search",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "q",
+                  "value": "python"
+                }
+              ]
+            },
+            "description": "Internal service-to-service endpoint. Not exposed through the gateway; no token.\nSuccess: 200 OK.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Scoring: score",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8006/scores/{{applicationId}}",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8006",
+              "path": [
+                "scores",
+                "{{applicationId}}"
+              ]
+            },
+            "description": "Internal service-to-service endpoint. Not exposed through the gateway; no token. Called by the BFF.\nSuccess: 200 OK.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "Application: board summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:8005/jobs/{{jobId}}/applications/summary",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "8005",
+              "path": [
+                "jobs",
+                "{{jobId}}",
+                "applications",
+                "summary"
+              ]
+            },
+            "description": "Internal service-to-service endpoint. Not exposed through the gateway; no token. Called by the BFF. Application runs 2 replicas without a host port; call it from inside the Compose network.\nSuccess: 200 OK.",
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ],
+      "auth": {
+        "type": "noauth"
+      },
+      "description": "Direct service URLs inside the local environment. These endpoints are not exposed through the gateway and take no token."
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8000/api",
+      "type": "string"
+    },
+    {
+      "key": "candidateToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "recruiterToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "adminToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "jobId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "applicationId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "candidateId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "resumeId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "candidateEmail",
+      "value": "candidate@example.com",
+      "type": "string"
+    },
+    {
+      "key": "recruiterEmail",
+      "value": "recruiter@example.com",
+      "type": "string"
+    },
+    {
+      "key": "password",
+      "value": "ChangeMe123!",
+      "type": "string"
+    },
+    {
+      "key": "idempotencyKey",
+      "value": "",
+      "type": "string"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "description": "A user changed their name or current employer. Carries the NAMES of the changed fields, not their values (E.1 principle 10): read the profile from Identity if needed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "user_id",
+    "changed"
+  ],
+  "properties": {
+    "user_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "changed": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "full_name",
+          "current_company"
+        ]
+      }
+    }
+  },
+  "examples": [
+    {
+      "user_id": "01a1b2c3-0000-7000-8000-000000000001",
+      "changed": [
+        "full_name"
+      ]
+    }
+  ]
+}

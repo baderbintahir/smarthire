@@ -28,6 +28,9 @@ services:
 
   redis:
     image: redis:7
+    # Design v1.2: Redis holds login (refresh) sessions, not just caches. Append-only file, fsync every
+    # second (a crash loses at most ~1 s of writes); noeviction: never drop keys to free memory
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
     ports:
       - "127.0.0.1:6379:6379"                      # no password locally: localhost only
     volumes:

@@ -70,8 +70,8 @@ async def test_defaults(session):
     candidate_id = await add_candidate(session)
     session.add(make_resume(candidate_id))
     await session.commit()
-    row = (await session.execute(text("SELECT full_name, skills, education FROM candidates"))).one()
-    assert tuple(row) == ("", [], [])
+    row = (await session.execute(text("SELECT skills, education FROM candidates"))).one()
+    assert tuple(row) == ([], [])
     resume = (await session.execute(text("SELECT status, is_active, uploaded_at FROM resumes"))).one()
     assert resume.status == "UPLOADED" and resume.is_active and resume.uploaded_at is not None
 

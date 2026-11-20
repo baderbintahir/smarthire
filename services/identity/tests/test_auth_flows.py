@@ -1,5 +1,6 @@
 """Component tests: the real app against real Postgres + Redis (see conftest.py)."""
 
+import hashlib
 import time
 
 import jwt
@@ -12,8 +13,9 @@ from tests.conftest import run
 COOKIE = "refresh_token"
 
 
-def register(client, email="ana@example.com", role="CANDIDATE", **extra):
-    return client.post("/auth/register", json={"email": email, "password": "correct-horse", "role": role, **extra})
+def register(client, email="ana@example.com", role="CANDIDATE", *, roles=None, full_name="Ana Example", **extra):
+    body = {"email": email, "password": "correct-horse", "full_name": full_name, "roles": roles or [role], **extra}
+    return client.post("/auth/register", json=body)
 
 
 def login(client, email="ana@example.com", password="correct-horse"):
@@ -48,17 +50,27 @@ def test_register_candidate(client, settings):
     r = register(client)
     assert r.status_code == 201
     body = r.json()
-    assert body["email"] == "ana@example.com" and body["role"] == "CANDIDATE"
-    assert body["status"] == "ACTIVE" and body["recruiter_profile"] is None
+    assert body["email"] == "ana@example.com" and body["roles"] == ["CANDIDATE"]
+    assert body["full_name"] == "Ana Example" and body["current_company"] is None and body["status"] == "ACTIVE"
     assert "password" not in r.text and "hash" not in r.text
     stored = fetch_one(settings.database_url, "SELECT password_hash FROM users")[0]
     assert stored.startswith("$argon2id$")  # hashed at rest
 
 
-def test_register_recruiter_creates_profile(client):
-    r = register(client, "rita@example.com", "RECRUITER", display_name="Rita", company="[Company A]")
+def test_register_recruiter_with_company(client):
+    r = register(client, "rita@example.com", "RECRUITER", full_name="Rita", current_company="[Company A]")
     assert r.status_code == 201
-    assert r.json()["recruiter_profile"] == {"display_name": "Rita", "company": "[Company A]"}
+    assert (r.json()["full_name"], r.json()["current_company"], r.json()["roles"]) == ("Rita", "[Company A]", ["RECRUITER"])
+
+
+def test_register_with_two_roles(client, settings):
+    r = register(client, "both@example.com", roles=["RECRUITER", "CANDIDATE"])
+    assert r.status_code == 201 and r.json()["roles"] == ["CANDIDATE", "RECRUITER"]  # stable order (role id)
+    event = fetch_one(settings.database_url, "SELECT payload FROM outbox")[0]
+    # roles in the order given; `role` is the deprecated v1 field (= first role)
+    assert event["payload"] == {"user_id": r.json()["id"], "role": "RECRUITER", "roles": ["RECRUITER", "CANDIDATE"]}
+    claims = jwt.decode(login(client, "both@example.com").json()["access_token"], options={"verify_signature": False})
+    assert claims["roles"] == ["CANDIDATE", "RECRUITER"] and claims["name"] == "Ana Example"
 
 
 def test_registration_writes_user_registered_to_the_outbox(client, settings):
@@ -66,7 +78,7 @@ def test_registration_writes_user_registered_to_the_outbox(client, settings):
     topic, key, event = fetch_one(settings.database_url, "SELECT topic, message_key, payload FROM outbox")
     assert (topic, key) == ("identity.users", user_id)  # keyed by user: one user's events stay in order
     assert event["event_type"] == "UserRegistered" and event["producer"] == "identity"
-    assert event["payload"] == {"user_id": user_id, "role": "CANDIDATE"}  # ids only, no email
+    assert event["payload"] == {"user_id": user_id, "role": "CANDIDATE", "roles": ["CANDIDATE"]}  # no email or name
 
 
 def test_failed_registration_writes_no_event(client, settings):
@@ -77,9 +89,14 @@ def test_failed_registration_writes_no_event(client, settings):
 
 
 def test_register_validation(client):
-    assert register(client, role="RECRUITER").status_code == 422  # recruiter needs display_name
     assert register(client, role="ADMIN").status_code == 422  # admins can't self-register
-    r = client.post("/auth/register", json={"email": "not-an-email", "password": "short", "role": "CANDIDATE"})
+    assert register(client, roles=["CANDIDATE", "ADMIN"]).status_code == 422  # not even alongside another role
+    assert register(client, roles=["CANDIDATE", "CANDIDATE"]).status_code == 422
+    assert register(client, full_name="  ").status_code == 422  # a name is required
+    assert client.post("/auth/register", json={"email": "x@example.com", "password": "correct-horse",
+                                               "full_name": "X", "roles": []}).status_code == 422
+    r = client.post("/auth/register", json={"email": "not-an-email", "password": "short", "full_name": "X",
+                                            "roles": ["CANDIDATE"]})
     assert r.status_code == 422 and r.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
@@ -102,9 +119,13 @@ def test_login_returns_token_and_secure_cookie(client, settings):
     cookie_header = r.headers["set-cookie"]
     for flag in ("HttpOnly", "Secure", "SameSite=strict", "Path=/auth"):
         assert flag in cookie_header
-    # Only the SHA-256 hash is stored, never the token itself
-    stored = fetch_one(settings.database_url, "SELECT token_hash FROM refresh_tokens")[0]
-    assert len(stored) == 32 and r.cookies[COOKIE].encode() not in bytes(stored)
+    # The cookie is "{sid}.{secret}"; Redis holds the session with only the secret's SHA-256 hash
+    sid, secret = r.cookies[COOKIE].split(".")
+    stored, ttl = redis_session(settings, sid)
+    assert stored["secret_hash"] == hashlib.sha256(secret.encode()).hexdigest() and secret not in str(stored)
+    assert stored["user_id"] == user_id_of(body["access_token"])
+    assert 13 * 86400 < ttl <= settings.refresh_token_ttl_days * 86400  # 14 days
+    assert fetch_one(settings.database_url, "SELECT to_regclass('identity.refresh_tokens')")[0] is None  # table gone (v1.2)
 
 
 def test_token_verifies_with_published_jwks(client):
@@ -115,7 +136,7 @@ def test_token_verifies_with_published_jwks(client):
     jwk = next(k for k in jwks["keys"] if k["kid"] == kid)
     assert "d" not in jwk  # the private exponent must never be published
     claims = jwt.decode(token, jwt.PyJWK(jwk).key, algorithms=["RS256"], audience="smarthire")
-    assert claims["role"] == "CANDIDATE"
+    assert claims["roles"] == ["CANDIDATE"] and claims["name"] == "Ana Example"
 
 
 def test_wrong_password_and_unknown_email_look_identical(client):
@@ -131,12 +152,12 @@ def test_wrong_password_and_unknown_email_look_identical(client):
 
 
 def test_me_requires_valid_token(client):
-    register(client, "rita@example.com", "RECRUITER", display_name="Rita")
+    register(client, "rita@example.com", "RECRUITER", full_name="Rita")
     token = login(client, "rita@example.com").json()["access_token"]
     r = client.get("/users/me", headers=bearer(token))
     assert r.status_code == 200
     assert r.json()["email"] == "rita@example.com"
-    assert r.json()["recruiter_profile"]["display_name"] == "Rita"
+    assert r.json()["full_name"] == "Rita" and r.json()["roles"] == ["RECRUITER"]
 
     missing = client.get("/users/me")
     assert missing.status_code == 401 and missing.headers["WWW-Authenticate"] == "Bearer"
@@ -201,16 +222,55 @@ def test_refresh_without_cookie_is_401(client):
     assert client.post("/auth/refresh").status_code == 401
 
 
+def test_malformed_and_old_style_cookies_are_401(client):
+    register(client)
+    login(client)
+    # an old Postgres-era token (no sid), garbage, and a made-up session
+    for value in ("x" * 43, "a.b.c", ".", "nosuchsid.whatever"):
+        assert refresh_with(client, value).status_code == 401
+
+
+def test_concurrent_refreshes_with_the_same_cookie_cannot_both_win(client, settings):
+    """The rotation is one Lua script: exactly one of two racing refreshes rotates; the other sees
+    a stale secret, which counts as reuse and ends the session."""
+    import asyncio
+
+    from redis.asyncio import Redis
+
+    from app.domain import tokens
+    from app.repositories import sessions as sessions_repo
+
+    register(client)
+    sid, secret = login(client).cookies[COOKIE].split(".")
+
+    async def race():
+        redis = Redis.from_url(settings.redis_url, decode_responses=True)
+        try:
+            presented = tokens.hash_refresh_secret(secret)
+            return await asyncio.gather(*(
+                sessions_repo.rotate(redis, sid=sid, presented_hash=presented,
+                                     new_hash=tokens.hash_refresh_secret(f"new-{i}"), ttl_seconds=60)
+                for i in range(2)
+            ))
+        finally:
+            await redis.aclose()
+
+    statuses = sorted(status for status, _ in run(race()))
+    assert statuses == [sessions_repo.REUSED, sessions_repo.ROTATED]
+    assert redis_session(settings, sid)[0] == {}  # the reuse deleted the session
+
+
 # ---------- Step 2.9: logout, logout-all, admin revoke ----------
 
 
-def test_logout_revokes_session_and_clears_cookie(client):
+def test_logout_revokes_session_and_clears_cookie(client, settings):
     register(client)
     cookie = login(client).cookies[COOKIE]
     r = client.post("/auth/logout")
     assert r.status_code == 204
     assert 'refresh_token=""' in r.headers["set-cookie"] and "Max-Age=0" in r.headers["set-cookie"]
     assert refresh_with(client, cookie).status_code == 401
+    assert redis_session(settings, cookie.split(".")[0])[0] == {}  # the Redis session is gone
     assert client.post("/auth/logout").status_code == 204  # idempotent
 
 
@@ -236,7 +296,7 @@ def _create_admin(settings, email="admin@example.com"):
     async def go():
         engine = create_async_engine(settings.database_url)
         async with AsyncSession(engine) as session:
-            await register_user(session, email=email, password="correct-horse", role="ADMIN")
+            await register_user(session, email=email, password="correct-horse", full_name="Admin", roles=["ADMIN"])
         await engine.dispose()
 
     run(go())
@@ -282,6 +342,19 @@ def test_discovery_document_points_to_jwks(client, settings):
 
 
 # ---------- Phase 4.3: revocation keys for the gateway (Appendix F.3) ----------
+
+
+def redis_session(settings, sid):
+    async def go():
+        from redis.asyncio import Redis
+
+        r = Redis.from_url(settings.redis_url, decode_responses=True)
+        try:
+            return await r.hgetall(f"identity:session:{sid}"), await r.ttl(f"identity:session:{sid}")
+        finally:
+            await r.aclose()
+
+    return run(go())
 
 
 def redis_get(settings, key):
@@ -342,5 +415,5 @@ def test_internal_contact_for_other_services(client):
     user_id = register(client, "ana@example.com").json()["id"]
     r = client.get(f"/internal/users/{user_id}/contact")
     assert r.status_code == 200 and r.json() == {"user_id": user_id, "email": "ana@example.com",
-                                                 "role": "CANDIDATE", "status": "ACTIVE"}
+                                                 "roles": ["CANDIDATE"], "status": "ACTIVE"}
     assert client.get("/internal/users/01a1b2c3-0000-7000-8000-000000000009/contact").status_code == 404

@@ -1,6 +1,6 @@
 """Identity's business errors. Each has a stable code clients can switch on."""
 
-from smarthire_common.errors import ConflictError, ForbiddenError, UnauthorizedError
+from smarthire_common.errors import ConflictError, ForbiddenError, NotFoundError, UnauthorizedError
 
 
 class EmailAlreadyRegisteredError(ConflictError):
@@ -30,3 +30,25 @@ class AccountSuspendedError(ForbiddenError):
 
     def __init__(self) -> None:
         super().__init__("This account is suspended")
+
+
+class RoleAlreadyHeldError(ConflictError):
+    code = "ROLE_ALREADY_HELD"
+
+    def __init__(self) -> None:
+        super().__init__("The user already holds this role")
+
+
+class RoleNotHeldError(NotFoundError):
+    code = "ROLE_NOT_HELD"
+
+    def __init__(self) -> None:
+        super().__init__("The user does not hold this role")
+
+
+class LastRoleError(ConflictError):
+    code = "LAST_ROLE"
+
+    def __init__(self) -> None:
+        # A user with no roles would get tokens every service rejects; suspend the account instead
+        super().__init__("A user must keep at least one role; suspend the account instead")

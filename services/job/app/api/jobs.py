@@ -44,7 +44,7 @@ async def list_jobs(
     if mine:
         if user is None:
             raise UnauthorizedError("Log in to see your jobs")
-        if user.role != "RECRUITER":
+        if not user.has_role("RECRUITER"):
             raise ForbiddenError("Only recruiters have jobs")
         items, next_cursor = await service.list_mine(session, user, status=status_filter, limit=limit, cursor=cursor)
     else:

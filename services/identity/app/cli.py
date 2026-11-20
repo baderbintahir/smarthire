@@ -19,7 +19,9 @@ async def create_admin(email: str, password: str) -> None:
     init_db(Settings().database_url)
     try:
         async with session_scope() as session:
-            user, _ = await register_user(session, email=email, password=password, role="ADMIN")
+            # The admin's display name defaults to the email's local part; change it with PATCH /users/me
+            user, _ = await register_user(session, email=email, password=password,
+                                          full_name=email.split("@")[0], roles=["ADMIN"])
         print(f"Created ADMIN {user.email} ({user.id})")
     finally:
         await close_db()

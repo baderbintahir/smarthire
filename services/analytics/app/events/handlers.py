@@ -16,7 +16,8 @@ CONSUMER_NAME = "analytics"
 TOPICS = ["identity.users", "jobs.lifecycle", "applications.lifecycle", "scoring.results", "system.failures",
           "assistant.usage"]
 
-ROLE_COUNTERS = {"CANDIDATE": "total_candidates", "RECRUITER": "total_recruiters"}  # admins aren't counted
+# Totals count ROLE HOLDERS (design v1.1): a recruiter who also holds CANDIDATE is in both. Admins aren't counted.
+ROLE_COUNTERS = {"CANDIDATE": "total_candidates", "RECRUITER": "total_recruiters"}
 
 
 def is_interview_stage(stage: str) -> bool:
@@ -25,8 +26,21 @@ def is_interview_stage(stage: str) -> bool:
 
 
 async def on_user_registered(session: AsyncSession, event: EventEnvelope) -> None:
+    # `roles` arrived in schema v2; v1 events (replayed by a rebuild) only have the single `role`
+    for role in event.payload.get("roles") or [event.payload["role"]]:
+        if counter := ROLE_COUNTERS.get(role):
+            await p.bump_counter(session, counter)
+
+
+async def on_role_granted(session: AsyncSession, event: EventEnvelope) -> None:
     if counter := ROLE_COUNTERS.get(event.payload["role"]):
         await p.bump_counter(session, counter)
+
+
+async def on_role_revoked(session: AsyncSession, event: EventEnvelope) -> None:
+    # Same partition key (user_id) as the grant/registration: replays see them in the same order
+    if counter := ROLE_COUNTERS.get(event.payload["role"]):
+        await p.drop_counter(session, counter)
 
 
 async def on_job_ready(session: AsyncSession, event: EventEnvelope) -> None:
@@ -78,6 +92,8 @@ async def on_assistant_query(session: AsyncSession, event: EventEnvelope) -> Non
 
 HANDLERS = {
     "UserRegistered": on_user_registered,
+    "RoleGranted": on_role_granted,
+    "RoleRevoked": on_role_revoked,
     "JobReady": on_job_ready,
     "JobPublishFailed": on_job_publish_failed,
     "ApplicationSubmitted": on_application_submitted,

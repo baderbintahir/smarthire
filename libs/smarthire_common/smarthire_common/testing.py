@@ -175,7 +175,10 @@ class TokenFactory:
         self.key_provider = StaticKeyProvider({self.KID: self._key.public_key()})
         self.issuer, self.audience = issuer, audience
 
-    def mint(self, *, user_id=None, role: str = "CANDIDATE", ttl_seconds: int = 900, **claims) -> str:
+    def mint(self, *, user_id=None, role: str = "CANDIDATE", roles=None, name: str = "Test User",
+             ttl_seconds: int = 900, **claims) -> str:
+        """Mints the design v1.1 shape: a "roles" array and a "name". `role="X"` is shorthand
+        for roles=["X"]; pass roles=[...] for multi-role users."""
         import time
         import uuid
 
@@ -183,7 +186,8 @@ class TokenFactory:
 
         now = int(time.time())
         payload = {
-            "sub": str(user_id or uuid.uuid4()), "role": role, "iss": self.issuer, "aud": self.audience,
+            "sub": str(user_id or uuid.uuid4()), "roles": list(roles or [role]), "name": name,
+            "iss": self.issuer, "aud": self.audience,
             "iat": now, "exp": now + ttl_seconds, "jti": str(uuid.uuid4()), "tv": 1, **claims,
         }
         return jwt.encode(payload, self._key, algorithm="RS256", headers={"kid": self.KID})

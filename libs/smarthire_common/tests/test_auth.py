@@ -41,7 +41,7 @@ KEY_A, KEY_B = new_key(), new_key()
 def make_token(private_key=KEY_A, kid="a", **overrides):
     now = datetime.now(UTC)
     claims = {
-        "sub": str(uuid.uuid4()), "role": "CANDIDATE", "iss": ISS, "aud": AUD, "jti": str(uuid.uuid4()),
+        "sub": str(uuid.uuid4()), "roles": ["CANDIDATE"], "name": "Test User", "iss": ISS, "aud": AUD, "jti": str(uuid.uuid4()),
         "iat": int(now.timestamp()), "exp": int((now + timedelta(minutes=15)).timestamp()),
     }
     claims.update(overrides)
@@ -93,8 +93,23 @@ def static_auth(redis):
 
 
 async def test_valid_token(static_auth):
-    claims = await auth.verify_token(make_token(role="RECRUITER"))
-    assert claims["role"] == "RECRUITER"
+    claims = await auth.verify_token(make_token(roles=["RECRUITER"]))
+    assert claims["roles"] == ["RECRUITER"]
+
+
+async def test_legacy_single_role_claim_is_rejected(static_auth):
+    # Tokens from before design v1.1 carried a single "role" and no "roles"
+    token = jwt.encode({**jwt.decode(make_token(), options={"verify_signature": False}), "role": "RECRUITER"}
+                       | {"roles": None}, KEY_A, algorithm="RS256", headers={"kid": "a"})
+    with pytest.raises(UnauthorizedError):
+        await auth.verify_token(token)
+
+
+@pytest.mark.parametrize("roles", [[], "RECRUITER", [1], None])
+async def test_missing_or_malformed_roles_are_rejected(static_auth, roles):
+    token = make_token(roles=roles)
+    with pytest.raises(UnauthorizedError):
+        await auth.verify_token(token)
 
 
 @pytest.mark.parametrize(
@@ -221,7 +236,7 @@ def app_client(static_auth):
 
     @app.get("/me")
     async def me(user: CurrentUser = Depends(get_current_user)):
-        return {"user_id": str(user.user_id), "role": user.role}
+        return {"user_id": str(user.user_id), "roles": list(user.roles), "name": user.name}
 
     @app.post("/jobs")
     async def create_job(user: CurrentUser = Depends(require_role("RECRUITER"))):
@@ -229,7 +244,7 @@ def app_client(static_auth):
 
     @app.get("/board")
     async def board(user: CurrentUser | None = Depends(auth.get_optional_user)):
-        return {"user": user.role if user else None}
+        return {"user": list(user.roles) if user else None}
 
     return TestClient(app)
 
@@ -238,14 +253,17 @@ def test_dependencies_401_vs_403(app_client):
     bearer = lambda t: {"Authorization": f"Bearer {t}"}  # noqa: E731
     assert app_client.get("/me").status_code == 401  # no token
     assert app_client.get("/me", headers=bearer("garbage")).status_code == 401  # bad token
-    assert app_client.get("/me", headers=bearer(make_token())).json()["role"] == "CANDIDATE"
-    r = app_client.post("/jobs", headers=bearer(make_token(role="CANDIDATE")))
+    me = app_client.get("/me", headers=bearer(make_token())).json()
+    assert me["roles"] == ["CANDIDATE"] and me["name"] == "Test User"
+    r = app_client.post("/jobs", headers=bearer(make_token(roles=["CANDIDATE"])))
     assert r.status_code == 403  # valid token, wrong role
-    assert app_client.post("/jobs", headers=bearer(make_token(role="RECRUITER"))).status_code == 200
+    assert app_client.post("/jobs", headers=bearer(make_token(roles=["RECRUITER"]))).status_code == 200
+    # Several roles: holding ANY of the required ones is enough
+    assert app_client.post("/jobs", headers=bearer(make_token(roles=["CANDIDATE", "RECRUITER"]))).status_code == 200
 
 
 def test_ensure_owner():
-    me = CurrentUser(user_id=uuid.uuid4(), role="RECRUITER", jti="j", claims={})
+    me = CurrentUser(user_id=uuid.uuid4(), roles=("RECRUITER",), jti="j", claims={})
     ensure_owner(me.user_id, me)  # own resource: fine
     with pytest.raises(ForbiddenError):
         ensure_owner(uuid.uuid4(), me)  # someone else's: 403
@@ -253,8 +271,8 @@ def test_ensure_owner():
 
 def test_optional_user(app_client):
     assert app_client.get("/board").json() == {"user": None}  # anonymous is fine
-    ok = app_client.get("/board", headers={"Authorization": f"Bearer {make_token(role='RECRUITER')}"})
-    assert ok.json() == {"user": "RECRUITER"}
+    ok = app_client.get("/board", headers={"Authorization": f"Bearer {make_token(roles=['RECRUITER'])}"})
+    assert ok.json() == {"user": ["RECRUITER"]}
     # A bad token is NOT treated as anonymous
     assert app_client.get("/board", headers={"Authorization": "Bearer garbage"}).status_code == 401
 
@@ -273,7 +291,7 @@ def test_token_factory_tokens_verify():
         original = auth.get_redis
         auth.get_redis = lambda: fake
         claims = asyncio.run(auth.verify_token(tokens.mint(role="RECRUITER")))
-        assert claims["role"] == "RECRUITER"
+        assert claims["roles"] == ["RECRUITER"] and claims["name"] == "Test User"
     finally:
         auth.get_redis = original
         auth._config = None

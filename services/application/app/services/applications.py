@@ -53,10 +53,11 @@ async def submit(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID, *,
     # 3. The job is open: checked in OUR replica, no call to the Job service
     job = await jobs.get(session, job_id)
     rules.check_job_open(_job_facts(job), datetime.now(UTC))
+    rules.check_not_own_job(job.recruiter_id, user.user_id)  # before calling Candidate: cheap rules first
 
     # 4. The candidate may apply: complete profile, and every eligibility rule passes
     candidate = await candidates.facts(authorization)
-    rules.check_profile(candidate)
+    rules.check_profile(candidate, user.name)
     rules.check_eligible(job.eligibility_rules, candidate)
 
     # 5. ONE transaction. The quota row lock makes this candidate's applies take turns, so
@@ -64,7 +65,7 @@ async def submit(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID, *,
     try:
         active = await repo.lock_quota(session, user.user_id)
         rules.check_quota(active, max_active)
-        application = Application(job_id=job_id, candidate_id=user.user_id, candidate_name=candidate.full_name.strip(),
+        application = Application(job_id=job_id, candidate_id=user.user_id, candidate_name=user.name.strip(),
                                   current_stage=rules.FIRST_STAGE)
         await repo.add(session, application)
         await repo.add_history(session, application.id, from_stage=None, to_stage=rules.FIRST_STAGE,

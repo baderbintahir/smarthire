@@ -1,11 +1,15 @@
-"""All SQL for users and recruiter profiles. Services call these; routers never do."""
+"""All SQL for users and their roles. Services call these; routers never do."""
 
 import uuid
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import RecruiterProfile, User
+from app.models import User, UserRole
+
+# Fixed ids seeded by migration 0005 (roles table)
+ROLE_IDS = {"CANDIDATE": 1, "RECRUITER": 2, "ADMIN": 3}
 
 
 async def get_by_email(session: AsyncSession, email: str) -> User | None:
@@ -18,17 +22,40 @@ async def get_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
     return await session.get(User, user_id)
 
 
-async def get_recruiter_profile(session: AsyncSession, user_id: uuid.UUID) -> RecruiterProfile | None:
-    return await session.get(RecruiterProfile, user_id)
-
-
-async def add(session: AsyncSession, user: User, profile: RecruiterProfile | None = None) -> None:
+async def add(session: AsyncSession, user: User) -> None:
     session.add(user)
-    # Flush the user first: the profile's foreign key needs the users row to exist
-    await session.flush()
-    if profile is not None:
-        session.add(profile)
-        await session.flush()
+    await session.flush()  # the users row must exist before user_roles rows reference it
+
+
+ROLE_NAMES = {role_id: name for name, role_id in ROLE_IDS.items()}
+
+
+async def get_roles(session: AsyncSession, user_id: uuid.UUID) -> list[str]:
+    """The user's roles in a stable order (role id): the same user always gets the same token claim."""
+    stmt = select(UserRole.role_id).where(UserRole.user_id == user_id).order_by(UserRole.role_id)
+    return [ROLE_NAMES[role_id] for role_id in (await session.execute(stmt)).scalars()]
+
+
+async def add_role(session: AsyncSession, user_id: uuid.UUID, role: str, granted_by: uuid.UUID | None) -> bool:
+    """Grants a role. False if the user already holds it. ON CONFLICT on the (user_id, role_id)
+    primary key: two concurrent grants can't both "succeed" or raise mid-transaction."""
+    stmt = (
+        pg_insert(UserRole)
+        .values(user_id=user_id, role_id=ROLE_IDS[role], granted_by=granted_by)
+        .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
+        .returning(UserRole.user_id)
+    )
+    return (await session.execute(stmt)).first() is not None
+
+
+async def remove_role(session: AsyncSession, user_id: uuid.UUID, role: str) -> bool:
+    """False if the user didn't hold the role."""
+    stmt = delete(UserRole).where(UserRole.user_id == user_id, UserRole.role_id == ROLE_IDS[role]).returning(UserRole.user_id)
+    return (await session.execute(stmt)).first() is not None
+
+
+async def update_profile(session: AsyncSession, user_id: uuid.UUID, changes: dict) -> None:
+    await session.execute(update(User).where(User.id == user_id).values(**changes, updated_at=func.now()))
 
 
 async def set_password_hash(session: AsyncSession, user: User, password_hash: str) -> None:

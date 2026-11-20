@@ -1,6 +1,6 @@
 """Application's business errors. Each has a stable code clients can switch on."""
 
-from smarthire_common.errors import AppError, ConflictError, NotFoundError
+from smarthire_common.errors import AppError, ConflictError, ForbiddenError, NotFoundError
 
 
 class _Unprocessable(AppError):
@@ -73,3 +73,11 @@ class ApplicationNotFoundError(NotFoundError):
 
     def __init__(self) -> None:
         super().__init__("Application not found")
+
+
+class OwnJobError(ForbiddenError):
+    code = "CANNOT_APPLY_TO_OWN_JOB"
+
+    def __init__(self) -> None:
+        # One account can be a recruiter AND a candidate (design v1.1), but never on the same job
+        super().__init__("You cannot apply to a job you posted")

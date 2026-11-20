@@ -20,7 +20,6 @@ candidate_only = require_role("CANDIDATE")
 def to_out(candidate: Candidate, active: Resume | None) -> ProfileOut:
     return ProfileOut(
         id=candidate.id,
-        full_name=candidate.full_name,
         headline=candidate.headline,
         skills=candidate.skills,
         experience_years=candidate.experience_years,

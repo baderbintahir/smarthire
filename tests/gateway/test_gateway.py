@@ -27,8 +27,8 @@ def gateway_running():
 def new_user(role="CANDIDATE") -> tuple[str, str]:
     """Registers a fresh user through the gateway; returns (email, access_token)."""
     email = f"gw-{uuid.uuid4().hex[:10]}@example.com"
-    extra = {"display_name": "Rita"} if role == "RECRUITER" else {}
-    r = httpx.post(f"{ID}/auth/register", json={"email": email, "password": "correct-horse", "role": role, **extra})
+    body = {"email": email, "password": "correct-horse", "full_name": "Rita" if role == "RECRUITER" else "Jane Doe", "roles": [role]}
+    r = httpx.post(f"{ID}/auth/register", json=body)
     assert r.status_code == 201, r.text
     return email, login(email)
 
@@ -91,7 +91,7 @@ def test_job_board_is_public_but_writes_need_a_token_at_the_gateway():
 
 def test_candidate_profile_and_resume_through_the_gateway():
     _, token = new_user()
-    profile = {"full_name": "Jane Doe", "skills": ["Python"]}
+    profile = {"headline": "Backend developer", "skills": ["Python"]}
     assert httpx.put(f"{GATEWAY}/api/candidates/me", json=profile, headers=bearer(token)).status_code == 200
     pdf = b"%PDF-1.4\n%%EOF\n"
     r = httpx.post(f"{GATEWAY}/api/candidates/me/resumes", files={"file": ("cv.pdf", pdf)}, headers=bearer(token))

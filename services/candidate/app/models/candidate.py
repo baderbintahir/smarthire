@@ -27,7 +27,6 @@ class Candidate(Base, TimestampMixin):
 
     # The SAME id as the Identity user (no new id, and no foreign key: users live in Identity's DB)
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
-    full_name: Mapped[str] = mapped_column(Text, server_default=text("''"))
     headline: Mapped[str | None] = mapped_column(Text)
     # jsonb: read/written as whole lists, never filtered on in Postgres
     skills: Mapped[list] = mapped_column(JSONB, server_default=text("'[]'"))

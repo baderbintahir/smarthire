@@ -12,7 +12,7 @@ from app.repositories.candidate_api import HttpCandidateClient
 def client(status: int, calls: list) -> HttpCandidateClient:
     def answer(request: httpx.Request) -> httpx.Response:
         calls.append(request.url.path)
-        return httpx.Response(status, json={"full_name": "Jane", "experience_years": 3, "active_resume": {"id": "r"}})
+        return httpx.Response(status, json={"experience_years": 3, "active_resume": {"id": "r"}})
 
     return HttpCandidateClient("http://candidate", transport=httpx.MockTransport(answer),
                                breaker=CircuitBreaker(failures=2, reset_seconds=60))
@@ -38,4 +38,4 @@ async def test_a_4xx_is_an_answer_not_an_outage():
 
 async def test_success():
     facts = await client(200, []).facts("Bearer t")
-    assert facts.full_name == "Jane" and facts.has_resume
+    assert facts.experience_years == 3 and facts.has_resume

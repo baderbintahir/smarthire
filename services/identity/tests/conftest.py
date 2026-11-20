@@ -68,7 +68,8 @@ def settings(migrated, database_url, redis_url, private_key_path) -> Settings:
 
 @pytest.fixture
 def client(settings):
-    run(testing.truncate(settings.database_url, ["users", "recruiter_profiles", "refresh_tokens", "outbox"]))
+    # CASCADE also empties user_roles; the seeded roles table stays
+    run(testing.truncate(settings.database_url, ["users", "outbox"]))
     run(testing.flush_redis(settings.redis_url))
     # https: the refresh cookie is Secure, so the client only sends it back over https
     with TestClient(create_app(settings), base_url="https://testserver") as c:

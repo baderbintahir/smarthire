@@ -21,7 +21,7 @@ router = APIRouter(prefix="/internal", tags=["internal"])
 class Contact(BaseModel):
     user_id: uuid.UUID
     email: str
-    role: str
+    roles: list[str]
     status: str  # ACTIVE / SUSPENDED: callers may choose not to email suspended users
 
 
@@ -30,4 +30,5 @@ async def contact(user_id: uuid.UUID, session: AsyncSession = Depends(get_sessio
     user = await users_repo.get_by_id(session, user_id)
     if user is None:
         raise NotFoundError("User not found", code="USER_NOT_FOUND")
-    return Contact(user_id=user.id, email=user.email, role=user.role, status=user.status)
+    roles = await users_repo.get_roles(session, user_id)
+    return Contact(user_id=user.id, email=user.email, roles=roles, status=user.status)

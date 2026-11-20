@@ -33,14 +33,21 @@ def stack_running():
 # ---------- helpers ----------
 
 
-def register(role="CANDIDATE") -> tuple[str, str]:
-    """Registers through the gateway; returns (user_id, access_token)."""
+def register(role="CANDIDATE", roles=None, full_name=None) -> tuple[str, str]:
+    """Registers through the gateway (design v1.1 body); returns (user_id, access_token)."""
+    user_id, login = register_and_login(role, roles, full_name)
+    return user_id, login.json()["access_token"]
+
+
+def register_and_login(role="CANDIDATE", roles=None, full_name=None) -> tuple[str, httpx.Response]:
     email = f"ev-{uuid.uuid4().hex[:10]}@example.com"
-    extra = {"display_name": "Rita"} if role == "RECRUITER" else {}
-    r = httpx.post(f"{GATEWAY}/identity/auth/register", json={"email": email, "password": "correct-horse", "role": role, **extra})
+    body = {"email": email, "password": "correct-horse", "roles": roles or [role],
+            "full_name": full_name or ("Rita Recruiter" if role == "RECRUITER" else "Jane Doe")}
+    r = httpx.post(f"{GATEWAY}/identity/auth/register", json=body)
     assert r.status_code == 201, r.text
     login = httpx.post(f"{GATEWAY}/identity/auth/login", json={"email": email, "password": "correct-horse"})
-    return r.json()["id"], login.json()["access_token"]
+    assert login.status_code == 200, login.text
+    return r.json()["id"], login
 
 
 def sql(query: str) -> str:
@@ -97,7 +104,7 @@ def test_registering_a_candidate_creates_their_profile():
         lambda: (r := httpx.get(f"{GATEWAY}/candidates/me", headers={"Authorization": f"Bearer {token}"})).status_code == 200 and r.json(),
         what="the candidate profile",
     )
-    assert profile["id"] == user_id and profile["full_name"] == ""
+    assert profile["id"] == user_id and profile["skills"] == [] and "full_name" not in profile
     assert sql(f"SELECT published_at IS NOT NULL FROM identity.outbox WHERE message_key = '{user_id}'") == "t"
 
 
@@ -106,7 +113,8 @@ def test_event_in_kafka_is_keyed_by_user_and_matches_its_schema():
     [msg] = read_messages("identity.users", user_id)
     assert msg.value()[0] == 0  # Confluent wire format: magic byte 0, then the 4-byte schema id
     event = decode(msg)  # validated against the registered schema
-    assert event["event_type"] == "UserRegistered" and event["payload"] == {"user_id": user_id, "role": "CANDIDATE"}
+    assert event["event_type"] == "UserRegistered"
+    assert event["payload"] == {"user_id": user_id, "role": "CANDIDATE", "roles": ["CANDIDATE"]}  # schema v2
 
 
 def test_recruiters_get_no_candidate_profile():
@@ -199,6 +207,41 @@ def test_publishing_runs_the_saga_to_ready():
              what="the replica")
 
 
+def test_recruiter_takes_candidate_role_but_cannot_apply_to_own_job():
+    """Phase 14R "Done when": register a recruiter -> add CANDIDATE -> refresh -> publish a job ->
+    applying to their own job is blocked -> a different candidate can apply (name from their token)."""
+    rita_id, login = register_and_login("RECRUITER", full_name="Rita Both")
+    rita = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    r = httpx.post(f"{GATEWAY}/identity/users/me/roles", json={"role": "CANDIDATE"}, headers=rita)
+    assert r.status_code == 201 and r.json()["roles"] == ["CANDIDATE", "RECRUITER"]
+    [granted] = [e for e in map(decode, read_messages("identity.users", rita_id, expected=2)) if e["event_type"] == "RoleGranted"]
+    assert granted["payload"] == {"user_id": rita_id, "role": "CANDIDATE", "granted_by": None}
+
+    # Refresh through the gateway: the cookie is Secure, and the test talks plain http to localhost
+    refreshed = httpx.post(f"{GATEWAY}/identity/auth/refresh",
+                           headers={"Cookie": f"refresh_token={login.cookies['refresh_token']}"})
+    assert refreshed.status_code == 200, refreshed.text
+    rita = {"Authorization": f"Bearer {refreshed.json()['access_token']}"}
+    # RoleGranted -> Candidate created her profile
+    wait_for(lambda: httpx.get(f"{GATEWAY}/candidates/me", headers=rita).status_code == 200, what="Rita's candidate profile")
+    httpx.put(f"{GATEWAY}/candidates/me", json={"experience_years": 3}, headers=rita)
+    httpx.post(f"{GATEWAY}/candidates/me/resumes", files={"file": ("cv.pdf", b"%PDF-1.4\n%%EOF\n")}, headers=rita)
+
+    job = published_job(refreshed.json()["access_token"])
+    wait_for(lambda: sql(f"SELECT status FROM application.job_replica WHERE job_id = '{job['id']}'") == "READY",
+             what="the replica to become READY")
+    own = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]},
+                     headers={**rita, "Idempotency-Key": str(uuid.uuid4())})
+    assert own.status_code == 403 and own.json()["error"]["code"] == "CANNOT_APPLY_TO_OWN_JOB"
+
+    _, token = register(full_name="Ana Other")
+    ana = {"Authorization": f"Bearer {token}"}
+    wait_for(lambda: httpx.get(f"{GATEWAY}/candidates/me", headers=ana).status_code == 200, what="Ana's profile")
+    httpx.post(f"{GATEWAY}/candidates/me/resumes", files={"file": ("cv.pdf", b"%PDF-1.4\n%%EOF\n")}, headers=ana)
+    r = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]}, headers={**ana, "Idempotency-Key": str(uuid.uuid4())})
+    assert r.status_code == 202 and r.json()["candidate_name"] == "Ana Other", r.text
+
+
 def test_candidate_applies_to_a_job_known_only_through_events():
     recruiter_id, recruiter_token = register("RECRUITER")
     rec = {"Authorization": f"Bearer {recruiter_token}"}
@@ -210,7 +253,7 @@ def test_candidate_applies_to_a_job_known_only_through_events():
     candidate_id, token = register()
     auth = {"Authorization": f"Bearer {token}"}
     wait_for(lambda: httpx.get(f"{GATEWAY}/candidates/me", headers=auth).status_code == 200, what="the profile")
-    httpx.put(f"{GATEWAY}/candidates/me", json={"full_name": "Jane Doe", "experience_years": 3}, headers=auth)
+    httpx.put(f"{GATEWAY}/candidates/me", json={"experience_years": 3}, headers=auth)
     httpx.post(f"{GATEWAY}/candidates/me/resumes", files={"file": ("cv.pdf", b"%PDF-1.4\n%%EOF\n")}, headers=auth)
     key = {"Idempotency-Key": str(uuid.uuid4())}
     r = httpx.post(f"{GATEWAY}/applications", json={"job_id": job["id"]}, headers={**auth, **key})
@@ -246,7 +289,7 @@ def candidate_with_parsed_resume(lines=None) -> tuple[str, dict]:
     auth = {"Authorization": f"Bearer {token}"}
     wait_for(lambda: httpx.get(f"{GATEWAY}/candidates/me", headers=auth).status_code == 200, what="the profile")
     # Eligibility (Application) uses the experience the candidate states in the profile
-    httpx.put(f"{GATEWAY}/candidates/me", json={"full_name": "Jane Doe", "experience_years": 3}, headers=auth)
+    httpx.put(f"{GATEWAY}/candidates/me", json={"experience_years": 3}, headers=auth)
     pdf = make_pdf(lines or RESUME_LINES)
     assert httpx.post(f"{GATEWAY}/candidates/me/resumes", files={"file": ("cv.pdf", pdf, "application/pdf")},
                       headers=auth).status_code == 202

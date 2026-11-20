@@ -5,6 +5,7 @@ Lifecycle:
   any ACTIVE --> HIRED | REJECTED (recruiter decision) | WITHDRAWN (candidate) | CLOSED (job closed)
 The last four are final. Only ACTIVE applications count against the candidate's quota."""
 
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -14,6 +15,7 @@ from app.domain.errors import (
     InvalidStageError,
     JobNotOpenError,
     NotEligibleError,
+    OwnJobError,
     ProfileIncompleteError,
     QuotaExceededError,
 )
@@ -25,9 +27,9 @@ FIRST_STAGE = "SUBMITTED"  # current_stage when an application is created
 
 @dataclass(frozen=True)
 class CandidateFacts:
-    """What we know about the applicant at apply time (from the Candidate service)."""
+    """What we know about the applicant at apply time (from the Candidate service). Not the name:
+    that comes from the token, Identity being its only source (design v1.1)."""
 
-    full_name: str
     experience_years: Decimal | None
     has_resume: bool
 
@@ -49,10 +51,16 @@ def check_job_open(job: JobFacts | None, now: datetime) -> None:
         raise JobNotOpenError("The application deadline has passed")
 
 
-def check_profile(candidate: CandidateFacts) -> None:
+def check_not_own_job(job_recruiter_id: uuid.UUID, applicant_id: uuid.UUID) -> None:
+    if job_recruiter_id == applicant_id:
+        raise OwnJobError()
+
+
+def check_profile(candidate: CandidateFacts, name: str | None) -> None:
+    """name: the token's `name` claim (Identity's users.full_name)."""
     missing = []
-    if not candidate.full_name.strip():
-        missing.append("your full name")
+    if not (name or "").strip():
+        missing.append("your full name")  # only tokens from before design v1.1 lack it: log in again
     if not candidate.has_resume:
         missing.append("a resume")  # Scoring (Phase 10) needs one
     if missing:

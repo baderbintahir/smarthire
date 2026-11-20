@@ -26,9 +26,9 @@ class EducationEntry(BaseModel):
 
 
 class ProfileIn(BaseModel):
-    """PUT = the whole profile (optional fields left out are cleared, not kept)."""
+    """PUT = the whole profile (optional fields left out are cleared, not kept). No name here: a
+    person's name lives in Identity (design v1.1); change it with PATCH /api/identity/users/me."""
 
-    full_name: Name
     headline: str | None = Field(default=None, max_length=200)
     skills: list[Skill] = Field(default_factory=list, max_length=50)
     # Decimal, not float: 2.1 years must stay exactly 2.1 (the column is numeric(4,1))
@@ -50,7 +50,6 @@ class ResumeOut(BaseModel):
 
 class ProfileOut(BaseModel):
     id: uuid.UUID
-    full_name: str
     headline: str | None
     skills: list[str]
     experience_years: float | None

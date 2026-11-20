@@ -1,5 +1,5 @@
 {
-  "description": "A user account was created (Identity). Candidate creates an empty profile for CANDIDATEs.",
+  "description": "A user account was created (Identity). Candidate creates an empty profile when roles include CANDIDATE. `role` is deprecated (= first of `roles`), kept so v1 consumers and old events keep working.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,12 +18,29 @@
         "RECRUITER",
         "ADMIN"
       ]
+    },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "CANDIDATE",
+          "RECRUITER",
+          "ADMIN"
+        ]
+      }
     }
   },
   "examples": [
     {
       "user_id": "01a1b2c3-0000-7000-8000-000000000001",
-      "role": "CANDIDATE"
+      "role": "RECRUITER",
+      "roles": [
+        "RECRUITER",
+        "CANDIDATE"
+      ]
     }
   ]
 }

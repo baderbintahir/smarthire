@@ -27,7 +27,7 @@ def key() -> tokens.SigningKey:
 
 def _token(key, **overrides):
     args = dict(
-        user_id=uuid.uuid4(), role="CANDIDATE", token_version=1,
+        user_id=uuid.uuid4(), roles=["CANDIDATE"], name="Ana Example", token_version=1,
         issuer="smarthire-identity", audience="smarthire", ttl_seconds=900,
     )
     return tokens.create_access_token(key, **{**args, **overrides})
@@ -47,7 +47,7 @@ def test_access_token_claims_and_header(key):
     decoded = _decode(key, token)
     assert decoded == claims
     assert decoded["exp"] - decoded["iat"] == 900
-    assert set(decoded) == {"sub", "role", "tv", "iss", "aud", "iat", "exp", "jti"}
+    assert set(decoded) == {"sub", "roles", "name", "tv", "iss", "aud", "iat", "exp", "jti"}
 
 
 def test_expired_token_rejected(key):
@@ -91,8 +91,15 @@ def test_kid_is_stable_thumbprint(key):
     assert tokens.public_jwk(key)["kid"] == key.kid
 
 
-def test_refresh_tokens_random_and_hashed():
-    t1, t2 = tokens.new_refresh_token(), tokens.new_refresh_token()
+def test_refresh_secrets_random_and_hashed():
+    t1, t2 = tokens.new_refresh_secret(), tokens.new_refresh_secret()
     assert t1 != t2 and len(t1) >= 43
-    assert tokens.hash_refresh_token(t1) == tokens.hash_refresh_token(t1)
-    assert len(tokens.hash_refresh_token(t1)) == 32  # SHA-256 digest bytes
+    assert tokens.hash_refresh_secret(t1) == tokens.hash_refresh_secret(t1)
+    assert len(tokens.hash_refresh_secret(t1)) == 64  # SHA-256, hex
+
+
+def test_refresh_token_format():
+    sid, secret = tokens.new_session_id(), tokens.new_refresh_secret()
+    assert tokens.parse_refresh_token(tokens.format_refresh_token(sid, secret)) == (sid, secret)
+    for bad in (None, "", "nodot", "a.b.c", ".x", "x."):
+        assert tokens.parse_refresh_token(bad) is None

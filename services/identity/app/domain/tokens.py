@@ -57,7 +57,8 @@ def create_access_token(
     key: SigningKey,
     *,
     user_id: uuid.UUID,
-    role: str,
+    roles: list[str],
+    name: str,
     token_version: int,
     issuer: str,
     audience: str,
@@ -67,7 +68,8 @@ def create_access_token(
     now = now or datetime.now(UTC)
     claims = {
         "sub": str(user_id),  # subject: who the token is about
-        "role": role,  # lets services authorise without calling Identity
+        "roles": roles,  # every role the user holds (design v1.1): services authorise without calling Identity
+        "name": name,  # users.full_name: Application snapshots it at apply time (Identity owns names)
         "tv": token_version,  # token_version: "logout everywhere" invalidates older tokens
         "iss": issuer,  # issuer: who created it
         "aud": audience,  # audience: who should accept it
@@ -85,12 +87,31 @@ def public_jwk(key: SigningKey) -> dict:
     return {**jwk, "kid": key.kid, "alg": ALGORITHM, "use": "sig"}
 
 
-def new_refresh_token() -> str:
-    """256 bits of randomness. Opaque: it means nothing by itself, only its DB row does."""
+def new_refresh_secret() -> str:
+    """256 bits of randomness. Opaque: it means nothing by itself, only its Redis session does."""
     return secrets.token_urlsafe(32)
 
 
-def hash_refresh_token(token: str) -> bytes:
-    """SHA-256 is enough here (unlike passwords): the token is already long and random, so it
-    cannot be guessed, only stolen. Hashing means a DB leak doesn't hand out live tokens."""
-    return hashlib.sha256(token.encode()).digest()
+def hash_refresh_secret(secret: str) -> str:
+    """SHA-256 is enough here (unlike passwords): the secret is already long and random, so it
+    cannot be guessed, only stolen. Storing the hash means a Redis leak doesn't hand out live tokens.
+    Hex, because Redis hash fields are strings."""
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def new_session_id() -> str:
+    return secrets.token_urlsafe(16)  # random, not sequential: sids can't be guessed from each other
+
+
+def format_refresh_token(sid: str, secret: str) -> str:
+    """The cookie value. The sid says WHICH session; the secret proves you hold its current token.
+    token_urlsafe never produces '.', so the first '.' separates them."""
+    return f"{sid}.{secret}"
+
+
+def parse_refresh_token(token: str | None) -> tuple[str, str] | None:
+    """(sid, secret), or None for anything malformed (old Postgres-era cookies included)."""
+    if not token or token.count(".") != 1:
+        return None
+    sid, secret = token.split(".")
+    return (sid, secret) if sid and secret else None

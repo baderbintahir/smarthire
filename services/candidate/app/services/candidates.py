@@ -38,7 +38,8 @@ async def get_profile_for(
 ) -> tuple[Candidate, Resume | None]:
     """Who may read a profile: the candidate themselves, recruiters and admins.
     TODO(Phase 8): a recruiter only if the candidate applied to one of their jobs."""
-    if user.role == "CANDIDATE" and user.user_id != candidate_id:
+    # Multi-role: a recruiter or admin may read others' profiles even if they also hold CANDIDATE
+    if user.user_id != candidate_id and not user.has_role("RECRUITER", "ADMIN"):
         # 403 for EVERY other id, existing or not: the answer depends on the role, so it reveals
         # nothing about which ids exist
         raise ForbiddenError("Candidates can only see their own profile")
@@ -50,7 +51,6 @@ async def save_profile(session: AsyncSession, user: CurrentUser, data: ProfileIn
     await repo.upsert(
         session,
         user.user_id,
-        full_name=data.full_name,
         headline=data.headline,
         skills=normalize_skills(data.skills),
         experience_years=data.experience_years,
