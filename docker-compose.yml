@@ -435,6 +435,11 @@ services:
       KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
       # Topics are created on purpose (infra/kafka/create-topics.sh), never by a typo
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # Keep consumer groups' committed offsets for a year (default 7 days after a group goes idle).
+      # History topics are kept forever and consumers start at "earliest" when they have no offset:
+      # with the default, a stack left off for a week would replay ALL history into every consumer,
+      # far beyond processed_events' 30-day dedupe window (duplicate emails, workflows).
+      KAFKA_OFFSETS_RETENTION_MINUTES: 525600
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0    # dev: consumers start immediately (default waits 3 s)
       KAFKA_HEAP_OPTS: -Xmx512m -Xms512m           # keep the JVM laptop-sized
     ports:
