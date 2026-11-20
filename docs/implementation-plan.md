@@ -313,6 +313,8 @@ Shortcuts: `make up`, `make down`, `make logs s=identity`, `make migrate s=ident
 
 **Goal:** users can register, log in, refresh, and log out. Identity issues RS256-signed JWTs and publishes its public keys.
 
+> **Superseded in parts by Phase 14R (design v1.2).** Steps 2.2, 2.4, 2.7–2.9 below describe the original build (single `role` column, `recruiter_profiles`, refresh tokens in Postgres). The current design is roles as data, name and employer on `users`, and refresh sessions in Redis: see Phase 14R and Appendix E.4.
+
 **Concepts to learn first:** password hashing (argon2/bcrypt); JWT structure (header, payload, signature); asymmetric keys (private signs, public verifies); access vs refresh tokens; JWKS; 401 vs 403.
 
 ### Step 2.1 — Scaffold the service
@@ -913,6 +915,50 @@ Write `docs/part-a-checkpoint.md`: what works, how you tested it, screenshots of
 
 ---
 
+# Phase 14R — Review 1 design changes (design v1.1 + v1.2)
+
+**Goal:** bring the code to the design in `docs/architecture.html` (version 1.2): roles as data, name and employer on the user, the new Identity events, and refresh sessions in Redis. Rationale: Appendix F.6 and F.7. Schemas: E.4, E.6, E.13.
+
+Migrations follow expand -> migrate -> contract: add and backfill first, switch the code, then drop. Identity can't read Candidate's schema (rule 1), so existing users' `full_name` is backfilled from `recruiter_profiles.display_name`, else from the email's local part (dev data; users fix it with `PATCH /users/me`).
+
+### Step R1 — Identity schema, expand
+Migration: `roles` (seeded), `user_roles` (backfilled from `users.role`), `users.full_name` and `current_company` (backfilled from `recruiter_profiles`). Nothing is dropped yet.
+**Done when:** migration up/down/up passes; every existing user has a `user_roles` row and a non-empty `full_name`.
+
+### Step R2 — Chassis auth with a roles array
+JWT claims `roles` (array) and `name`; `CurrentUser.roles`; `require_role(...)` passes when the user holds any of the listed roles; `TokenFactory` issues `roles`.
+**Done when:** chassis tests pass; every service's suite passes against the new helpers.
+
+### Step R3 — Identity: roles, profile, events
+Register with `roles` + `full_name` (+ optional `current_company`); tokens with `roles` + `name`; `GET`/`PATCH /users/me`; `POST /users/me/roles` (CANDIDATE or RECRUITER, 201 / 409); admin `POST /users/{id}/roles` and `DELETE /users/{id}/roles/{role}` (revoking bumps `token_version` and sets `revoked_before`); events `UserRegistered` (with `roles`), `RoleGranted`, `RoleRevoked`, `UserProfileUpdated` (ids and field names only, E.1 principle 10) through the outbox; schemas registered (BACKWARD).
+**Done when:** register with two roles; grant -> refreshed token carries both; revoke -> old token 401; `PATCH /users/me` emits `UserProfileUpdated`.
+
+### Step R4 — Refresh sessions in Redis
+Session store per E.13 with the rotation Lua script; logout deletes one session, logout-all and suspension delete all; the refresh-token retention job goes; Redis runs with AOF.
+**Done when:** rotation, reuse detection, logout, logout-all and suspension tests pass with no `refresh_tokens` access in the code.
+
+### Step R5 — Candidate
+Profile created on `UserRegistered` whose roles include CANDIDATE, and on `RoleGranted` CANDIDATE (idempotent); `candidates.full_name` removed from the API and the schema.
+**Done when:** a granted CANDIDATE gets a profile; replaying the event creates nothing new.
+
+### Step R6 — Application
+`candidate_name` from the token's `name` claim (the Candidate call stays for eligibility and the resume check); applying to your own job -> 403 `CANNOT_APPLY_TO_OWN_JOB`; role checks with the roles array.
+**Done when:** own-job apply is 403; another candidate's apply is 202 with the right name.
+
+### Step R7 — Job, Analytics, BFF
+Role checks with the roles array; Analytics counts role holders (+1 per role on `UserRegistered`, +1 on `RoleGranted`, -1 on `RoleRevoked`), falling back to `[role]` for old events, so rebuild-by-replay stays correct.
+**Done when:** totals are right after grant, revoke and a rebuild.
+
+### Step R8 — Contract migration
+Drop `users.role` and `ck_users_role`, `recruiter_profiles`, `refresh_tokens` (each downgrade recreates them).
+**Done when:** migration up/down/up passes and the schema matches E.4 exactly.
+
+### Step R9 — End to end
+Gateway and events e2e suites updated; Postman collection uses the new shapes (register with `roles`, `full_name`; add role; profile update; admin grant/revoke; own-job apply 403).
+**Done when:** register recruiter -> add CANDIDATE -> refresh -> create and publish a job -> own-job apply blocked -> another candidate applies.
+
+---
+
 # Phase 15 — Semantic Index Service (Week 4, 2–3 days)
 
 **Goal:** jobs and resumes become searchable by meaning, and the data is ready for AI ranking and the assistant.
@@ -1069,7 +1115,7 @@ You understand your system when you can do each of these **yourself**, then conf
 
 | Topic | Key | Events | Consumers |
 | --- | --- | --- | --- |
-| identity.users | user_id | UserRegistered | candidate, analytics |
+| identity.users | user_id | UserRegistered, RoleGranted, RoleRevoked, UserProfileUpdated | candidate, analytics |
 | jobs.lifecycle | job_id | JobUpdated, JobReady, JobPublishFailed, JobClosed | application, notification, analytics |
 | jobs.commands | job_id | JobPublishRequested | job (workflow starter) |
 | candidates.profile | candidate_id | ResumeUploaded, ResumeParsed | semantic_index, analytics |
@@ -1166,51 +1212,45 @@ This is the source of truth for every schema. When a step says "create the model
 
 ## E.4 Identity (PostgreSQL, schema `identity`)
 
+Design v1.2 (Review 1 + refresh sessions in Redis). Refresh tokens are not in this schema: see E.13.
+
 ```sql
 CREATE TABLE users (
-  id             uuid PRIMARY KEY,
-  email          text NOT NULL,
-  password_hash  text NOT NULL,
-  role           text NOT NULL CHECK (role IN ('CANDIDATE','RECRUITER','ADMIN')),
-  status         text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','SUSPENDED')),
-  token_version  int  NOT NULL DEFAULT 1,
-  created_at     timestamptz NOT NULL DEFAULT now(),
-  updated_at     timestamptz NOT NULL DEFAULT now()
+  id               uuid PRIMARY KEY,
+  email            text NOT NULL,
+  password_hash    text NOT NULL,
+  full_name        text NOT NULL,
+  current_company  text,                       -- current employer, any role
+  status           text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','SUSPENDED')),
+  token_version    int  NOT NULL DEFAULT 1,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  updated_at       timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX uq_users_email_lower ON users (lower(email));
 
-CREATE TABLE recruiter_profiles (
-  user_id       uuid PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  display_name  text NOT NULL,
-  company       text,
-  created_at    timestamptz NOT NULL DEFAULT now(),
-  updated_at    timestamptz NOT NULL DEFAULT now()
+CREATE TABLE roles (
+  id    smallint PRIMARY KEY,
+  name  text NOT NULL UNIQUE                  -- seed: 1 CANDIDATE, 2 RECRUITER, 3 ADMIN
 );
 
-CREATE TABLE refresh_tokens (
-  id          uuid PRIMARY KEY,
-  user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  family_id   uuid NOT NULL,
-  token_hash  bytea NOT NULL UNIQUE,
-  user_agent  text,
-  expires_at  timestamptz NOT NULL,
-  used_at     timestamptz,
-  revoked_at  timestamptz,
-  created_at  timestamptz NOT NULL DEFAULT now()
+CREATE TABLE user_roles (
+  user_id     uuid     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role_id     smallint NOT NULL REFERENCES roles(id),
+  granted_by  uuid,                           -- null when self-granted (registration, POST /users/me/roles)
+  granted_at  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, role_id)
 );
-CREATE INDEX ix_refresh_tokens_user_id   ON refresh_tokens (user_id);
-CREATE INDEX ix_refresh_tokens_family_id ON refresh_tokens (family_id);
+CREATE INDEX ix_user_roles_role_id ON user_roles (role_id);
 ```
 
 | Decision | Reason |
 | --- | --- |
-| One `users` table for all roles | One account store; role is an attribute |
-| `recruiter_profiles.user_id` as primary key | Database enforces one profile per user |
+| One `users` table for every role | One account store; a person is one row whatever roles they hold |
+| Roles as rows (`roles`, `user_roles`) | One account can hold several roles (a recruiter can also apply elsewhere); a new role needs no schema change |
+| `full_name`, `current_company` on `users` | Identity is the single source of a person's name; replaces `recruiter_profiles` and `candidates.full_name` |
 | `lower(email)` unique | Case-insensitive uniqueness |
-| `token_version` | "Log out everywhere" by bumping one number; included as a JWT claim |
-| `token_hash` (SHA-256), unique | Leaked database rows can't be used; lookup is one index hit |
-| `family_id` index | Reuse detection revokes a whole session family |
-| Retention | Delete rows expired or revoked more than 30 days ago (daily job) |
+| `token_version` | Bumped when a role is revoked, on logout-all and on suspension; a JWT claim, so Identity rejects older tokens |
+| No `refresh_tokens` table | Refresh sessions live in Redis (E.13): revoking one = deleting its key |
 
 Plus the shared `outbox` table (E.10).
 
@@ -1261,8 +1301,7 @@ Plus `outbox` (E.10) and `processed_events` (E.10) if the service consumes event
 
 ```sql
 CREATE TABLE candidates (
-  id                uuid PRIMARY KEY,               -- equals Identity user_id
-  full_name         text NOT NULL DEFAULT '',
+  id                uuid PRIMARY KEY,               -- equals Identity user_id (the name lives in Identity, E.4)
   headline          text,
   skills            jsonb NOT NULL DEFAULT '[]',
   experience_years  numeric(4,1) CHECK (experience_years >= 0),
@@ -1489,7 +1528,8 @@ CREATE TABLE processed_events (
 | Partial index on unpublished rows | The relay query stays fast however large the table grows |
 | Composite primary key on `processed_events` | The idempotency check itself: duplicate insert = already processed |
 | Outbox retention | Delete published rows older than 7 days (daily job) |
-| `processed_events` retention | Keep longer than Kafka topic retention (e.g., Kafka 7 days → keep 30 days) |
+| `processed_events` retention | 30 days: longer than any realistic redelivery. History topics are kept forever (read models are rebuilt by replaying them), so redelivery is bounded by committed consumer offsets, which the broker keeps for a year (`offsets.retention.minutes`) |
+| Kafka topic retention | Fact topics (`identity.users`, `jobs.lifecycle`, `candidates.profile`, `applications.lifecycle`, `scoring.results`, `system.failures`, `assistant.usage`): forever. `jobs.commands` and every `.dlq`: 7 days |
 
 ## E.11 MongoDB collections
 
@@ -1539,15 +1579,20 @@ Vector size must match the embedding model (384 for all-MiniLM-L6-v2). Retrieval
 
 ## E.13 Redis keys
 
-| Key pattern | Purpose | TTL |
-| --- | --- | --- |
-| `idem:{user_id}:{key}` | Cached response for an Idempotency-Key | 24 h |
-| `denylist:{jti}` | Revoked access token | Remaining token lifetime |
-| `revoked_before:{user_id}` | Reject this user's tokens issued at or before this unix second (suspension, logout everywhere) | Access-token lifetime (15 min): older tokens have expired by then |
-| `ratelimit:{scope}:{id}` | Token bucket state | Short (seconds to minutes) |
-| `login_fail:{email}` / `login_fail_ip:{ip}` | Failed login counters | 15 min |
-| `jwks:cache` | Cached public keys (optional) | 10 min |
-| `metrics:{name}` | Hot analytics results | 5–30 s |
+One Redis. A key is shared only where its writer and readers are listed. Redis now holds login sessions, so it runs with an append-only file (`--appendonly yes --appendfsync everysec`: at most about one second lost on a crash) and `noeviction` (keys are never dropped to free memory).
+
+| Key pattern | Written by | Read by | Holds | TTL |
+| --- | --- | --- | --- | --- |
+| `identity:session:{sid}` | Identity | Identity | Hash: `user_id`, `secret_hash` (SHA-256 of the current refresh secret), `user_agent`, `created_at` | 14 days, renewed on every refresh |
+| `identity:user_sessions:{user_id}` | Identity | Identity | Set of the user's session ids (logout-all, suspension) | 14 days, renewed |
+| `denylist:{jti}` | Identity | Gateway, every service | One revoked access token | Access-token lifetime (15 min) |
+| `revoked_before:{user_id}` | Identity | Gateway, every service | Unix second; this user's access tokens issued at or before it are rejected | 15 min + 60 s |
+| `login_fail:{email}` / `login_fail_ip:{ip}` | Identity | Identity | Failed-login counters | 15 min |
+| `idem:{user_id}:{key}` | Application | Application | Result of an `Idempotency-Key` request | 24 h |
+| `metrics:dashboard` | Analytics | Analytics | Cached metrics response | 10 s |
+| `plugin-limit-count:*` | Gateway | Gateway | Rate-limit counters | 1 min |
+
+Refresh token format: the cookie holds `{sid}.{secret}`. Refresh runs ONE Lua script: no session -> invalid; secret hash matches -> store the new hash and renew the TTL; mismatch -> an old secret was replayed (reuse), so the session is deleted.
 
 ## E.14 Scheduled maintenance jobs
 
@@ -1555,7 +1600,6 @@ Vector size must match the embedding model (384 for all-MiniLM-L6-v2). Retrieval
 | --- | --- | --- |
 | Delete published outbox rows older than 7 days | All publishers | Daily |
 | Delete processed_events older than 30 days | All consumers | Daily |
-| Delete expired or revoked refresh tokens older than 30 days | Identity | Daily |
 | Delete SENT notification_log rows older than 90 days | Notification | Weekly |
 
 Run them as Celery beat tasks or simple scheduled scripts in each service.
@@ -1585,7 +1629,7 @@ Rule of thumb: if you'd need to answer "which step is this process on, and why?"
 3. **The gateway enforces at the edge:** after verifying the signature locally (JWKS, no call to Identity) it checks Redis; a revoked token gets 401 at the gateway and never reaches any service.
 4. **Services check again** (chassis `verify_token`), for traffic that bypasses the gateway (rule 7).
 5. Redis unavailable → 503 at both layers (fail closed).
-6. Refresh tokens are revoked in Identity's database (logout, reuse detection), so a revoked session can't mint new access tokens.
+6. Refresh sessions live in Redis (E.13). Logout, logout-all, suspension and reuse detection delete them, so a revoked session can't mint new access tokens. This never depends on the access-token keys above, which expire after about 15 minutes.
 
 ## F.4 Gateway product
 Apache APISIX (open source, Apache 2.0), standalone mode with YAML config in git. Chosen because its open-source edition verifies JWTs against a JWKS endpoint (`openid-connect`, `bearer_only`, `use_jwks`), shares rate-limit counters in Redis (`limit-count`, `policy: redis`), supports custom Lua plugins (denylist), request IDs, path rewriting and SSE. Alternatives considered: Kong OSS (JWT plugin needs manually uploaded keys; JWKS requires the paid OIDC plugin), Traefik (no built-in JWT verification; needs ForwardAuth to a verifier service), Envoy (capable but verbose, separate rate-limit service). Plugin behaviour differs between APISIX versions: pin the version and verify in the Step 4.1 spike.
@@ -1595,3 +1639,17 @@ Apache APISIX (open source, Apache 2.0), standalone mode with YAML config in git
 - **Offline (background):** long jobs return 202 + job id and run as Temporal workflows in batches.
 - **Offline (prepared ahead):** embeddings are computed when jobs/resumes change (Phase 15), not when someone asks.
 - **Degraded:** LLM provider down → breaker opens, 503 with a clear message, non-LLM fallbacks where possible; hiring flows never depend on the LLM.
+
+## F.6 Review 1: roles as data, one source for a person's name (design v1.1)
+- **Roles as data.** `roles` + `user_roles` replace `users.role`. One account can hold several roles; ADMIN is never self-assigned. JWTs carry a `roles` array and a `name` claim; every role check is "X in roles".
+- **Name and employer on the user.** `users.full_name` (required) and `users.current_company`; `recruiter_profiles` and `candidates.full_name` are removed. Application snapshots `candidate_name` from the token's `name` claim at apply time.
+- **Conflict rule.** Nobody can apply to a job they own (`job_replica.recruiter_id`): 403 `CANNOT_APPLY_TO_OWN_JOB`.
+- **New Identity events** on `identity.users`: `RoleGranted {user_id, role, granted_by}`, `RoleRevoked {user_id, role, revoked_by}`, `UserProfileUpdated {user_id, changed}` (names of the changed fields, not their values). `UserRegistered` gains an optional `roles` array (its old `role` field stays, filled with the first role) so the schema change passes the BACKWARD check and old events still replay. No names in events (E.1 principle 10): no consumer needs them, Application takes the name from the token.
+- **Kept.** The Identity outbox (Candidate and Analytics read its events).
+
+## F.7 Refresh tokens in Redis, revocation by deleting the session (design v1.2)
+- The `refresh_tokens` table is removed; each login is one Redis session (E.13). Authentication stays JWT: only where Identity records refresh tokens changes.
+- **Rejected alternative:** deciding at refresh time by checking whether the presented access token is revoked. Access-token revocation records expire after about 15 minutes while refresh tokens live 14 days, so a revoked session would come back; and the client loses its in-memory access token on a page reload, when the cookie alone must restore the session.
+- Consequence: Redis durability matters (append-only file, `noeviction`). If Redis is down, login and refresh return 503, as protected routes already do.
+- Admin `POST /auth/revoke/{jti}` denylists that one access token; it does not end the refresh session.
+

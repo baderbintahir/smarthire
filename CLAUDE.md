@@ -98,19 +98,20 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 12B BFF (API composition): [x] 12B.1 scaffold + gateway route · [x] 12B.2 composed application view + recruiter dashboard (bff 11, events e2e 14)
 - [x] Phase 13 Observability: [x] 13.1 jaeger/prometheus/grafana + /metrics · [x] 13.2 OTel chassis · [x] 13.3 async propagation · [x] 13.4 metrics · [x] 13.5 failures topic · [x] 13.6 dashboards · [x] 13.7 gateway telemetry · [x] 13.8 Kafka vs Temporal (chassis 101, all service suites pass, gateway 14, events e2e 15; break-its verified)
 - [ ] Phase 14 Reliability + load tests (tag v0.1-core): [x] 14.1 failure-path review · [x] 14.2 breakers + APISIX checks · [x] 14.3 backpressure · [x] 14.3b retention jobs · [x] 14.4 load test · [x] 14.5 chaos · [ ] 14.6 checkpoint (doc written; needs the user's screenshots, then tag v0.1-core)
+- [x] Phase 14R Review 1 changes (design v1.2, docs/architecture.html): [x] R0 plan sync · [x] R1 identity schema expand · [x] R2 chassis roles · [x] R3 identity roles/profile/events · [x] R4 refresh sessions in Redis · [x] R5 candidate · [x] R6 application · [x] R7 job/analytics/bff · [x] R8 contract migration · [x] R9 e2e + Postman
 - [ ] Phase 15 Semantic index
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** finish 14.6 (screenshots in docs/images/, commit, tag v0.1-core), then Phase 15 (Semantic index).
+**Next step:** 14.6 (screenshots, tag v0.1-core), then Part B on branch `part-b` (its 15.1 work is in `git stash` on part-b: `git checkout part-b && git stash pop`).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
 chosen library variants, deviations from the plan, ports changed, known TODOs.)
 
-- `docs/SmartHire_Implementation_Plan.md` is the original; `docs/implementation-plan.md`
-  is the copy CLAUDE.md refers to. If the plan is edited, keep them in sync
-  (or delete the original).
+- Docs: `docs/architecture.html` is the FINAL word on the design (diagrams, flows, schemas, API);
+  `docs/implementation-plan.md` is the step plan, synced to it (Phase 14R). The pre-review copy of the
+  plan (`docs/SmartHire_Implementation_Plan.md`) was deleted; git history has it.
 - Service name stays `identity` (not `auth`): schema/user `identity`/`identity_user`,
   topic `identity.users`, route `/api/identity/*`.
 - Step 1.1: Postgres init is `infra/postgres/init.sh` (not `init.sql` as in the plan),
@@ -200,7 +201,7 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - Identity's REFRESH_COOKIE_PATH is `/api/identity/auth` in Compose (public path via gateway). Direct
   calls to identity:8001/auth/* won't get the cookie sent back; use the gateway.
 - PLAN REVISION 2 (2026-10-14, supervisor review): `docs/implementation-plan.md` is authoritative;
-  `docs/SmartHire_Implementation_Plan.md` is the pre-review original (kept unchanged for reference).
+  the pre-review original was later deleted (see the Docs note above).
   Rationale for all changes is in Appendix F of the plan.
   - Gateway = Apache APISIX (standalone YAML in infra/apisix), NOT a custom service. A hand-written
     FastAPI gateway was built in the first Step 4.1 attempt and deleted (user's decision); its route
@@ -699,8 +700,7 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   `smarthire_retention_deleted_total{job}`). Per service `app/maintenance.py` with JOBS (identity: outbox +
   refresh_tokens expired/revoked > 30 d; job/candidate/application: outbox + processed_events; notification:
   processed_events + SENT notification_log > 90 d; analytics: processed_events; scoring: Mongo outbox). Started in each
-  lifespan; run now: `docker compose exec <svc> python -m app.maintenance`. Kafka topic retention (7 d default) <
-  processed_events retention (30 d), as it must be.
+  lifespan; run now: `docker compose exec <svc> python -m app.maintenance`. Kafka retention: see KAFKA RETENTION note (fact topics forever since 14R).
 - 14.4 LOAD TEST: tests/load/ (setup_data.py direct to services on 127.0.0.1 ports, NOT the gateway: login limit;
   locustfile.py through the gateway; verify.py; chaos.py), Makefile `load-setup n=`, `load-test u= t=`, `load-verify`,
   `chaos`. Outputs (tokens!) in tests/load/.results/ (gitignored). Tokens live 15 min: run the load right after setup.
@@ -716,3 +716,35 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   events/s per group). Candidate outage checked separately: applies 503 fast, same key -> 202 after recovery.
 - ENVIRONMENT: on this network (router DNS 192.168.1.1) the name `ai_assistant` takes ~8 s to fail (other unknown names
   0.4 s), so gateway test_service_not_deployed_is_json_503 times out; not a code issue.
+- DESIGN v1.2 = docs/architecture.html (2026-11-20): the FINAL word on the target design; the plan's Phase 14R,
+  Appendix E.4/E.6/E.13 and F.6/F.7 were synced to it. Review 1 (v1.1): roles as data (`roles`, `user_roles`; JWT
+  `roles` array + `name`), `users.full_name`/`current_company` (recruiter_profiles and candidates.full_name removed),
+  events RoleGranted/RoleRevoked/UserProfileUpdated, own-job apply -> 403. v1.2: refresh tokens move to Redis
+  (`identity:session:{sid}` hash + `identity:user_sessions:{user_id}` set, cookie `{sid}.{secret}`, rotation in ONE
+  Lua script, reuse -> delete session), `refresh_tokens` table dropped, Redis with AOF everysec. Rejected: checking
+  the access token at refresh (its revocation keys expire after ~15 min vs 14 d refresh; access token lost on page
+  reload). Admin `/auth/revoke/{jti}` only denylists that token. The Claude-chat prompt
+  (~/Downloads/Coding_Agent_Prompt_Review1.md) guided Phase 14R; its B5 (refresh tokens stay in Postgres) is superseded.
+- BRANCHES (2026-11-20): Phase 14R is done on `main`. Part-B 15.1 work (Qdrant, semantic_index, compose/prometheus
+  edits, CLAUDE.md 15.1 notes) is stashed on `part-b` (stash message "part-b WIP: step 15.1 ..."); `part-b` must be
+  rebased onto main after 14R. The Qdrant/semantic_index containers may still exist as Compose orphans on main.
+- PHASE 14R DONE (2026-11-20, on main, uncommitted at the time): chassis 119, identity 52, job 89, candidate 91,
+  application 86, analytics 10, bff 11, notification 18, scoring 13, enrichment 12; gateway e2e 14; events e2e 15/16.
+  Live: schemas registered (UserRegistered v2 id 22 passed BACKWARD; RoleGranted/RoleRevoked/UserProfileUpdated new),
+  identity 0005+0006 and candidate 0003 applied, Redis AOF on (`appendonly yes`). Identity layout additions:
+  services/accounts.py (profile + grant/revoke), repositories/sessions.py (Redis sessions + rotation Lua).
+  Chassis: CurrentUser.roles (tuple) + .name + .has_role(); require_role = ANY of; tokens MUST carry `roles`.
+  Errors: ROLE_ALREADY_HELD 409, ROLE_NOT_HELD 404, LAST_ROLE 409 (can't remove a user's only role),
+  CANNOT_APPLY_TO_OWN_JOB 403. Analytics drop_counter floors at 0 (pre-Phase-7 users were never counted).
+- KAFKA RETENTION (decided 2026-11-20, plan E.14): fact topics (identity.users, jobs.lifecycle, candidates.profile,
+  applications.lifecycle, scoring.results, system.failures, assistant.usage) keep history FOREVER (retention.ms=-1, set
+  by infra/kafka/create-topics.sh on every run, also for existing topics); jobs.commands and *.dlq keep 7 d. Reason: the
+  analytics rebuild replays from offset 0; with 7 d it silently lost older history (found when the rebuild e2e failed;
+  that run left the dev analytics read model with only the last 7 days, source DBs intact; older events are gone for
+  good). Counterpart: broker KAFKA_OFFSETS_RETENTION_MINUTES=525600 (1 year), because consumers use
+  auto.offset.reset=earliest: with the 7 d default, a stack left off >1 week would replay ALL history past the 30 d
+  processed_events window (duplicate emails/workflows). Rebuild e2e right after a Kafka restart failed once, then passed
+  3x (consumers were still rejoining).
+- REPO HYGIENE (14R polish): README.md at the root; `docs/review/` (working AI prompts, outdated) and
+  `*.postman_environment.json` (may hold real tokens) are gitignored; postman/ collection + fictional sample resume are
+  committed.

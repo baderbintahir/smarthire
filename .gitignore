@@ -28,3 +28,12 @@ secrets/
 
 # Load test outputs (tokens, results)
 tests/load/.results/
+
+# Claude Code: personal permission settings (the shared .claude/ config, if any, is committed)
+.claude/settings.local.json
+
+# Postman environments can hold real tokens; the collection in postman/ is committed (no secrets in it)
+*.postman_environment.json
+
+# Working notes and AI prompts; decisions are recorded in docs/implementation-plan.md (Appendix F)
+docs/review/
