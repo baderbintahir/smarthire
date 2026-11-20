@@ -42,7 +42,37 @@ Admins can't self-register. Create one with:
 docker compose exec -it identity python -m app.cli create-admin admin@example.com
 ```
 
-Then import `postman/SmartHire.postman_collection.json` and run the folders in order.
+## Walk through the whole flow
+
+The Postman collection (`postman/SmartHire.postman_collection.json`) is the runnable version of the flows in
+[`docs/architecture.html`](docs/architecture.html). Its folders are in demo order, and test scripts save tokens,
+ids and versions into variables, so you can click through it or use **Run collection**.
+
+Before you start:
+
+1. `make up` and wait until `make ps` shows the services healthy.
+2. Create an admin whose password matches the collection's `password` variable (`ChangeMe123!`), or change the variable:
+   `docker compose exec -it identity python -m app.cli create-admin admin@example.com`
+3. Import the collection. For **Run collection**, set a delay of about 2500 ms between requests: publishing,
+   resume parsing and scoring happen in the background.
+4. Running it again? Change `candidateEmail` and `recruiterEmail` first (an email can register only once: 409).
+
+| Folder | What happens | Where to see it |
+| --- | --- | --- |
+| 1 Auth | Register a candidate and a recruiter (`UserRegistered`: Candidate creates the profile), log in, update a name, the recruiter adds the CANDIDATE role and refreshes (`RoleGranted`) | Kafka UI, topic `identity.users` |
+| 2 Jobs | Create and update a job, publish it: 202, PROCESSING, then READY when the publishing saga finishes | Temporal UI, workflow `publish-<job_id>-<version>`; Mailpit (JOB_READY to the recruiter) |
+| 3 Candidate | Profile, resume upload (202); parsed in the background | "List my resumes" shows PARSED |
+| 4 Applications | Apply (202), the same Idempotency-Key returns the same application, the recruiter can't apply to their own job (403); "Get application" shows SCREENING and a score once the application workflow ran | Temporal UI, workflow `app-<application_id>`; Mailpit |
+| 5 Recruiter | Board, move a stage, add a note, hire | Mailpit (stage and decision emails) |
+| 6 BFF | One screen composed from Application, Candidate and Scoring | `degraded` is empty while everything is up |
+| 7 Analytics | Metrics from the event-fed read model (cached 10 s) | Grafana, Business dashboard |
+| 8 Wrap up | Close the job, try to withdraw (409: a decided application is final), log out | |
+| 9 Admin | Log in as admin, revoke one access token, suspend the candidate, grant and revoke a role | the candidate's old token now gets 401 |
+
+Every request is traced: in Jaeger, pick the `gateway` service to follow one request through the services,
+Kafka, Temporal and Celery. Folder 10 calls internal endpoints directly (not through the gateway).
+
+## Tools
 
 | Tool | URL |
 | --- | --- |
