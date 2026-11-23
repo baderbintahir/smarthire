@@ -4,7 +4,7 @@
 .DEFAULT_GOAL := help
 
 # Targets are actions, not files: always run them even if a file/folder of that name exists
-.PHONY: help up down ps logs migrate test test-gateway test-events load-setup load-test load-verify chaos schemas keys check-s
+.PHONY: help up down ps logs migrate test test-gateway test-events load-setup load-test load-verify chaos schemas api-walkthrough keys check-s
 
 # Where a service's code lives: s=common is the shared library, anything else is services/<s>
 SERVICE_DIR = $(if $(filter common,$(s)),libs/smarthire_common,services/$(s))
@@ -52,6 +52,9 @@ chaos: ## During a load test: stop/start Kafka, Scoring, Notification, its worke
 
 schemas: ## Register the event schemas in Schema Registry (also runs on every `make up`)
 	SCHEMA_REGISTRY_URL=http://localhost:8081 PYTHONPATH=libs/smarthire_common python3 infra/schema-registry/register.py
+
+api-walkthrough: ## Regenerate docs/api-walkthrough.md from the Postman collection
+	python3 postman/walkthrough.py
 
 keys: ## Generate the dev RSA key pair Identity signs JWTs with (secrets/identity, gitignored)
 	cd services/identity && uv run python scripts/generate_dev_keys.py
