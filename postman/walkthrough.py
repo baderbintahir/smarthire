@@ -1,11 +1,13 @@
-"""Writes docs/api-walkthrough.md from the Postman collection: every request in run order, with its
-token, body, expected status and the variables it saves. The collection is the source of truth;
-regenerate after changing it:  make api-walkthrough
+"""Writes docs/api-walkthrough.md (read on GitHub) and docs/api-walkthrough.html (the docs site, next to
+architecture.html) from the Postman collection: every request in run order, with its token, body,
+expected status and the variables it saves. The collection is the source of truth; regenerate after
+changing it:  make api-walkthrough
 
 Standard library only."""
 
 from __future__ import annotations  # the system python3 may be older than 3.10
 
+import html
 import json
 import re
 from pathlib import Path
@@ -13,6 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COLLECTION = ROOT / "postman" / "SmartHire.postman_collection.json"
 OUTPUT = ROOT / "docs" / "api-walkthrough.md"
+OUTPUT_HTML = ROOT / "docs" / "api-walkthrough.html"
 
 TOKENS = {"{{candidateToken}}": "candidate token", "{{recruiterToken}}": "recruiter token",
           "{{adminToken}}": "admin token"}
@@ -94,22 +97,121 @@ def step(n: int, item: dict, folder_auth: dict | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def main() -> None:
-    collection = json.loads(COLLECTION.read_text())
+INTERNAL_NOTE = ("Not part of the flow: these call services directly (not through the gateway), "
+                 "for debugging. Paths are full URLs.")
+
+
+def is_internal(folder: dict) -> bool:
+    return folder["name"].startswith("10 ")
+
+
+def write_markdown(collection: dict) -> int:
     out, n = [INTRO], 0
     for folder in collection["item"]:
-        internal = folder["name"].startswith("10 ")
         out.append(f"## {folder['name']}\n")
         if folder.get("description"):
             out.append(folder["description"] + "\n")
-        if internal:
-            out.append("Not part of the flow: these call services directly (not through the gateway), "
-                       "for debugging. Paths are full URLs.\n")
+        if is_internal(folder):
+            out.append(INTERNAL_NOTE + "\n")
         for item in folder["item"]:
             n += 1
             out.append(step(n, item, folder.get("auth")))
     OUTPUT.write_text("\n".join(out))
-    print(f"wrote {OUTPUT.relative_to(ROOT)}: {n} requests")
+    return n
+
+
+# --- HTML page: same look as architecture.html; layout, CSS and JS live in the template ---
+
+TEMPLATE = Path(__file__).with_name("walkthrough.template.html")
+TOKEN_CLASS = {"candidate token": "t-cand", "recruiter token": "t-rec", "admin token": "t-adm", "none": "t-none"}
+
+
+def inline(text: str) -> str:
+    """Escapes text, then renders the little markdown the collection uses: `code`, **bold**, {{variables}}."""
+    out = html.escape(text, quote=False)
+    out = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", out)
+    out = re.sub(r"`([^`]+)`", r"<code>\1</code>", out)
+    return variables(out)
+
+
+def variables(escaped: str) -> str:
+    return re.sub(r"\{\{(\w+)\}\}", r'<span class="var">{{\1}}</span>', escaped)
+
+
+def slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def html_body(request: dict) -> str:
+    body = request.get("body")
+    if not body:
+        return ""
+    if body["mode"] == "formdata":
+        fields = ", ".join(f"<code>{html.escape(f['key'])}</code> = {inline(str(f.get('src') or f.get('value')))}"
+                           for f in body["formdata"])
+        return f'<p class="fd">Body (form-data): {fields}</p>'
+    raw = html.escape(body["raw"], quote=False)
+    return (f'<div class="code"><button class="copy" type="button">Copy</button>'
+            f"<pre><code>{variables(raw)}</code></pre></div>")
+
+
+def html_description(text: str) -> str:
+    paras = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        # "Role: ..." / "Success: ..." lines get their label in bold
+        label = re.match(r"^(\w[\w ]{0,20}):\s", line)
+        rest = inline(line[label.end():]) if label else inline(line)
+        paras.append(f"<p><b>{html.escape(label.group(1))}:</b> {rest}</p>" if label else f"<p>{rest}</p>")
+    return f'<div class="desc">{"".join(paras)}</div>' if paras else ""
+
+
+def html_step(n: int, item: dict, folder_auth: dict | None) -> str:
+    request = item["request"]
+    method, token = request["method"], token_of(request, folder_auth)
+    parts = [f'<article class="step" id="step-{n}">',
+             f'<h3><span class="num">{n}</span>{html.escape(item["name"])}'
+             f'<a class="anchor" href="#step-{n}" aria-label="Link to step {n}">#</a></h3>',
+             f'<div class="req"><span class="m m-{method.lower()}">{method}</span>'
+             f'<code class="path">{variables(html.escape(path_of(request)))}</code>'
+             f'<span class="tok {TOKEN_CLASS.get(token, "t-none")}">{"no token" if token == "none" else html.escape(token)}</span></div>']
+    headers = [h for h in request.get("header", []) if h["key"] != "Content-Type"]
+    if headers:
+        parts.append('<p class="hdrs">Headers: ' + ", ".join(
+            f"<code>{html.escape(h['key'])}: {variables(html.escape(h['value']))}</code>" for h in headers) + "</p>")
+    parts.append(html_body(request))
+    parts.append(html_description(request.get("description") or ""))
+    if saves := saved_variables(item):
+        parts.append('<p class="saves">Saves ' + " ".join(f"<code>{v}</code>" for v in saves) + "</p>")
+    parts.append("</article>")
+    return "".join(parts)
+
+
+def write_html(collection: dict) -> None:
+    nav, sections, n = [], [], 0
+    for folder in collection["item"]:
+        fid = "f-" + slug(folder["name"])
+        nav.append(f'<div class="ng" data-group="{fid}">{html.escape(folder["name"])}</div>')
+        steps = []
+        for item in folder["item"]:
+            n += 1
+            nav.append(f'<a href="#step-{n}" data-group="{fid}"><span class="n">{n}</span>{html.escape(item["name"])}</a>')
+            steps.append(html_step(n, item, folder.get("auth")))
+        intro = inline(folder["description"]) if folder.get("description") else ""
+        if is_internal(folder):
+            intro += ("<br>" if intro else "") + html.escape(INTERNAL_NOTE)
+        sections.append(f'<section class="folder" id="{fid}"><h2>{html.escape(folder["name"])}</h2>'
+                        + (f'<p class="note">{intro}</p>' if intro else "") + "".join(steps) + "</section>")
+    page = TEMPLATE.read_text().replace("<!--NAV-->", "".join(nav)).replace("<!--STEPS-->", "\n".join(sections))
+    OUTPUT_HTML.write_text(page)
+
+
+def main() -> None:
+    collection = json.loads(COLLECTION.read_text())
+    n = write_markdown(collection)
+    write_html(collection)
+    print(f"wrote {OUTPUT.relative_to(ROOT)} and {OUTPUT_HTML.relative_to(ROOT)}: {n} requests")
 
 
 if __name__ == "__main__":

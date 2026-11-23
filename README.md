@@ -7,11 +7,13 @@ observability.
 
 ## Documentation
 
+Read the docs as a website: **https://baderbintahir.github.io/smarthire/** (architecture and API walkthrough, published from `docs/` by GitHub Pages).
+
 | Document | What it is |
 | --- | --- |
 | [`docs/architecture.html`](docs/architecture.html) | **The design**: diagrams, the 17 end-to-end flows, events, schemas, Redis keys, API reference. Open it in a browser (works offline). |
 | [`docs/implementation-plan.md`](docs/implementation-plan.md) | The step-by-step build plan, the database design (Appendix E) and the architecture decisions (Appendix F). |
-| [`docs/api-walkthrough.md`](docs/api-walkthrough.md) | **Every API call in order** to test the whole flow: method, path, token, body, what each step saves. |
+| [`docs/api-walkthrough.md`](docs/api-walkthrough.md) ([web version](https://baderbintahir.github.io/smarthire/api-walkthrough.html)) | **Every API call in order** to test the whole flow: method, path, token, body, what each step saves. |
 | [`docs/part-a-checkpoint.md`](docs/part-a-checkpoint.md) | Part A checkpoint: what works, how it was tested, load and chaos results. |
 | [`CLAUDE.md`](CLAUDE.md) | Working agreement, architecture rules, progress tracker and decisions log. |
 | [`postman/`](postman) | Postman collection for the public API (folders follow the demo flow) and a fictional sample resume. |
@@ -45,7 +47,7 @@ docker compose exec -it identity python -m app.cli create-admin admin@example.co
 
 ## Walk through the whole flow
 
-**Step-by-step list of all 44 requests: [`docs/api-walkthrough.md`](docs/api-walkthrough.md).**
+**Step-by-step list of all 44 requests: [`docs/api-walkthrough.md`](docs/api-walkthrough.md), or the [web version](https://baderbintahir.github.io/smarthire/api-walkthrough.html) with search.**
 
 The Postman collection (`postman/SmartHire.postman_collection.json`) is the runnable version of the flows in
 [`docs/architecture.html`](docs/architecture.html). Its folders are in demo order, and test scripts save tokens,

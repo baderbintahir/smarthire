@@ -1,0 +1,275 @@
+<!doctype html>
+<!-- Template for docs/api-walkthrough.html. Edit this file, not the generated page: make api-walkthrough -->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartHire API walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Colours, fonts and the sidebar match architecture.html */
+:root{color-scheme:light;--paper:#FAFBFD;--panel:#FFFFFF;--ink:#1B2033;--muted:#5A6378;--line:#DDE1EA;--accent:#3C4FB5;--accent-soft:#EEF0FB;--amber:#B7791F;--amber-soft:#FDF0D8;--green:#2F855A;--green-soft:#E3F4EE;--code:#F1F3F8;--red:#B33A3A;--red-soft:#F9E1E1;}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--paper:#10131F;--panel:#171B2B;--ink:#E6E8F2;--muted:#A3AABD;--line:#2B3147;--accent:#9AA6F2;--accent-soft:#1F2544;--amber:#E2B15A;--amber-soft:#3A2D14;--green:#6FCF9C;--green-soft:#15302A;--code:#22283D;--red:#F09090;--red-soft:#3A1A1E;}}
+*{box-sizing:border-box}
+html{scroll-padding-top:24px}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 "IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+code{font:0.86em "IBM Plex Mono",ui-monospace,Consolas,monospace;background:var(--code);padding:0.1em 0.35em;border-radius:4px;overflow-wrap:anywhere}
+.side{position:fixed;inset:0 auto 0 0;width:270px;overflow-y:auto;border-right:1px solid var(--line);background:var(--panel);padding:22px 14px}
+.brand{font-weight:700;font-size:19px;margin:0 8px 2px}
+.brand+p{margin:0 8px 14px;color:var(--muted);font-size:13px}
+.side a{display:flex;gap:8px;padding:4px 8px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:14px;line-height:1.4}
+.side a .n{color:var(--muted);min-width:1.6em;text-align:right;font-variant-numeric:tabular-nums}
+.side a:hover,.side a:focus-visible{background:var(--accent-soft);color:var(--accent);outline:none}
+.side a.active{background:var(--accent-soft);color:var(--accent);font-weight:600;box-shadow:inset 3px 0 0 var(--accent)}
+.ng{margin:16px 8px 4px;color:var(--muted);font-size:13px;font-weight:600}
+.docsw{display:flex;gap:4px;margin:0 4px 14px;padding:3px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.side .docsw a,.docsw span{flex:1 1 0;white-space:nowrap;line-height:1.4;justify-content:center;text-align:center;padding:5px 4px;font-size:12.5px;border-radius:6px}
+.docsw span{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.find{margin:0 4px 4px}
+.find input{width:100%;font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink)}
+.find p{margin:4px 2px 0;color:var(--muted);font-size:12.5px;min-height:1.2em}
+.progress{position:fixed;top:0;left:0;height:3px;width:0;background:var(--accent);z-index:10}
+.totop{position:fixed;right:22px;bottom:22px;z-index:6;font:inherit;font-size:13.5px;padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--accent);cursor:pointer;opacity:0;pointer-events:none;transition:opacity .2s;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.totop.show{opacity:1;pointer-events:auto}
+main{margin-left:270px;padding:40px 48px 80px;max-width:1080px}
+header{margin-bottom:40px}
+h1{font-size:clamp(28px,3.4vw,40px);line-height:1.15;margin:6px 0 14px;letter-spacing:-0.01em}
+h2{font-size:24px;margin:0 0 10px;padding-top:6px;border-top:2px solid var(--ink);display:inline-block}
+p,li{max-width:78ch}
+.kicker{color:var(--accent);font-weight:600;margin:0}
+.lede{font-size:18px;color:var(--muted)}
+.note{color:var(--muted);font-size:14.5px}
+.cols2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px}
+.box h3{margin:0 0 6px;font-size:16px}.box ol,.box ul{margin:0;padding-left:20px;font-size:14.5px}.box li{margin-bottom:4px}
+.folder{margin-bottom:48px}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px 12px;margin:14px 0}
+.step:target{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.step h3{display:flex;align-items:center;gap:10px;font-size:17px;margin:0 0 8px}
+.num{display:inline-grid;place-items:center;min-width:28px;height:28px;padding:0 6px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:13.5px;font-weight:700}
+.anchor{color:var(--muted);text-decoration:none;font-weight:400;opacity:0;transition:opacity .15s}
+.step h3:hover .anchor,.anchor:focus-visible{opacity:1}
+.req{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.req .path{font-size:14px;background:none;padding:0}
+.m{font:600 12px "IBM Plex Mono",monospace;padding:2px 6px;border-radius:4px}
+.m-get{background:var(--green-soft);color:var(--green)}.m-post{background:var(--accent-soft);color:var(--accent)}.m-put,.m-patch{background:var(--amber-soft);color:var(--amber)}.m-delete{background:var(--red-soft);color:var(--red)}
+.tok{margin-left:auto;font-size:12px;font-weight:600;padding:1px 9px;border-radius:999px;white-space:nowrap}
+.t-cand{background:var(--green-soft);color:var(--green)}.t-rec{background:var(--accent-soft);color:var(--accent)}.t-adm{background:var(--amber-soft);color:var(--amber)}.t-none{background:var(--code);color:var(--muted)}
+.var{color:var(--amber);font-weight:500}
+.hdrs,.fd,.saves{font-size:14px;margin:8px 0 0}
+.saves{color:var(--muted)}.saves code{color:var(--green)}
+.code{position:relative;margin:10px 0 0}
+.code pre{margin:0;padding:10px 14px;background:var(--code);border-radius:8px;overflow-x:auto;font:13px/1.5 "IBM Plex Mono",ui-monospace,Consolas,monospace}
+.code pre code{background:none;padding:0;font-size:inherit;overflow-wrap:normal}
+.copy{position:absolute;top:6px;right:6px;font:inherit;font-size:12px;color:var(--accent);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 9px;cursor:pointer}
+.copy:hover,.copy:focus-visible{background:var(--accent-soft);outline:none}
+.desc{font-size:14.5px;margin-top:8px}.desc p{margin:4px 0}
+.hide{display:none!important}
+.menu{display:none}
+@media (max-width:900px){.side{transform:translateX(-100%);transition:transform .2s;z-index:5}.side.open{transform:none}main{margin-left:0;padding:24px 18px 60px}.menu{display:inline-block;position:sticky;top:0;z-index:6;margin:8px;font:inherit;padding:6px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink)}.cols2{grid-template-columns:1fr}.tok{margin-left:0}}
+@media (prefers-reduced-motion:reduce){.side{transition:none}}
+</style></head>
+<body>
+<button class="menu" type="button" aria-controls="side" aria-expanded="false">Contents</button>
+<nav class="side" id="side" aria-label="Contents">
+<div class="brand">SmartHire</div><p>Architecture and design docs</p>
+<div class="docsw"><a href="architecture.html">Architecture</a><span aria-current="page">API walkthrough</span></div>
+<div class="find"><input type="search" id="find" placeholder="Filter: name, path, variable…" aria-label="Filter steps"><p id="found" aria-live="polite"></p></div>
+<div class="ng" data-group="f-1-auth">1 Auth</div><a href="#step-1" data-group="f-1-auth"><span class="n">1</span>Register (candidate)</a><a href="#step-2" data-group="f-1-auth"><span class="n">2</span>Register (recruiter)</a><a href="#step-3" data-group="f-1-auth"><span class="n">3</span>Login (candidate)</a><a href="#step-4" data-group="f-1-auth"><span class="n">4</span>Login (recruiter)</a><a href="#step-5" data-group="f-1-auth"><span class="n">5</span>Refresh access token</a><a href="#step-6" data-group="f-1-auth"><span class="n">6</span>Get current user</a><a href="#step-7" data-group="f-1-auth"><span class="n">7</span>Update my name or employer</a><a href="#step-8" data-group="f-1-auth"><span class="n">8</span>Recruiter adds the CANDIDATE role</a><a href="#step-9" data-group="f-1-auth"><span class="n">9</span>Refresh recruiter token (after adding a role)</a><a href="#step-10" data-group="f-1-auth"><span class="n">10</span>JWKS</a><a href="#step-11" data-group="f-1-auth"><span class="n">11</span>OpenID configuration</a><div class="ng" data-group="f-2-jobs-recruiter">2 Jobs (recruiter)</div><a href="#step-12" data-group="f-2-jobs-recruiter"><span class="n">12</span>Create job</a><a href="#step-13" data-group="f-2-jobs-recruiter"><span class="n">13</span>List my jobs</a><a href="#step-14" data-group="f-2-jobs-recruiter"><span class="n">14</span>Get job</a><a href="#step-15" data-group="f-2-jobs-recruiter"><span class="n">15</span>Update job</a><a href="#step-16" data-group="f-2-jobs-recruiter"><span class="n">16</span>Publish job</a><a href="#step-17" data-group="f-2-jobs-recruiter"><span class="n">17</span>List jobs (public)</a><div class="ng" data-group="f-3-candidate-profile-resume">3 Candidate profile &amp; resume</div><a href="#step-18" data-group="f-3-candidate-profile-resume"><span class="n">18</span>Get my profile</a><a href="#step-19" data-group="f-3-candidate-profile-resume"><span class="n">19</span>Update my profile</a><a href="#step-20" data-group="f-3-candidate-profile-resume"><span class="n">20</span>Upload resume</a><a href="#step-21" data-group="f-3-candidate-profile-resume"><span class="n">21</span>List my resumes</a><a href="#step-22" data-group="f-3-candidate-profile-resume"><span class="n">22</span>Get candidate</a><a href="#step-23" data-group="f-3-candidate-profile-resume"><span class="n">23</span>Get resume download link</a><div class="ng" data-group="f-4-applications-candidate">4 Applications (candidate)</div><a href="#step-24" data-group="f-4-applications-candidate"><span class="n">24</span>Apply</a><a href="#step-25" data-group="f-4-applications-candidate"><span class="n">25</span>Apply again (same key)</a><a href="#step-26" data-group="f-4-applications-candidate"><span class="n">26</span>Apply to my own job (blocked)</a><a href="#step-27" data-group="f-4-applications-candidate"><span class="n">27</span>List my applications</a><a href="#step-28" data-group="f-4-applications-candidate"><span class="n">28</span>Get application</a><div class="ng" data-group="f-5-applications-recruiter">5 Applications (recruiter)</div><a href="#step-29" data-group="f-5-applications-recruiter"><span class="n">29</span>Recruiter board</a><a href="#step-30" data-group="f-5-applications-recruiter"><span class="n">30</span>Change stage</a><a href="#step-31" data-group="f-5-applications-recruiter"><span class="n">31</span>Add note</a><a href="#step-32" data-group="f-5-applications-recruiter"><span class="n">32</span>Make decision</a><div class="ng" data-group="f-6-bff-screens">6 BFF screens</div><a href="#step-33" data-group="f-6-bff-screens"><span class="n">33</span>Application detail screen</a><a href="#step-34" data-group="f-6-bff-screens"><span class="n">34</span>Recruiter dashboard</a><div class="ng" data-group="f-7-analytics">7 Analytics</div><a href="#step-35" data-group="f-7-analytics"><span class="n">35</span>Metrics</a><div class="ng" data-group="f-8-wrap-up-run-last">8 Wrap up (run last)</div><a href="#step-36" data-group="f-8-wrap-up-run-last"><span class="n">36</span>Close job</a><a href="#step-37" data-group="f-8-wrap-up-run-last"><span class="n">37</span>Withdraw application</a><a href="#step-38" data-group="f-8-wrap-up-run-last"><span class="n">38</span>Logout all sessions</a><a href="#step-39" data-group="f-8-wrap-up-run-last"><span class="n">39</span>Logout</a><div class="ng" data-group="f-9-admin">9 Admin</div><a href="#step-40" data-group="f-9-admin"><span class="n">40</span>Login (admin)</a><a href="#step-41" data-group="f-9-admin"><span class="n">41</span>Revoke access token (by jti)</a><a href="#step-42" data-group="f-9-admin"><span class="n">42</span>Suspend user</a><a href="#step-43" data-group="f-9-admin"><span class="n">43</span>Grant a role</a><a href="#step-44" data-group="f-9-admin"><span class="n">44</span>Revoke a role</a><div class="ng" data-group="f-10-internal-service-to-service-not-via-gateway">10 Internal (service-to-service, NOT via gateway)</div><a href="#step-45" data-group="f-10-internal-service-to-service-not-via-gateway"><span class="n">45</span>Identity: user contact</a><a href="#step-46" data-group="f-10-internal-service-to-service-not-via-gateway"><span class="n">46</span>Candidate: resume for scoring</a><a href="#step-47" data-group="f-10-internal-service-to-service-not-via-gateway"><span class="n">47</span>Job Enrichment: structured job</a><a href="#step-48" data-group="f-10-internal-service-to-service-not-via-gateway"><span class="n">48</span>Job Enrichment: search jobs</a><a href="#step-49" data-group="f-10-internal-service-to-service-not-via-gateway"><span class="n">49</span>Scoring: score</a><a href="#step-50" data-group="f-10-internal-service-to-service-not-via-gateway"><span class="n">50</span>Application: board summary</a>
+</nav>
+<main>
+<header>
+<p class="kicker">API walkthrough</p>
+<h1>The whole flow, request by request</h1>
+<p class="lede">Every public API call in the order that tests the application end to end: register, publish a job, upload a resume, apply, get scored, get hired, then the admin tools. The flows behind each step are explained in the <a href="architecture.html#flows">architecture doc</a>.</p>
+<p class="note">Generated from <code>postman/SmartHire.postman_collection.json</code> by <code>make api-walkthrough</code>. Verified end to end with newman: 44 requests, 0 failures.</p>
+<div class="cols2">
+<div class="box"><h3>Before you start</h3><ol>
+<li><code>make up</code>, then wait until <code>make ps</code> shows the services healthy.</li>
+<li>Create an admin whose password matches the <code>password</code> variable (<code>ChangeMe123!</code>):<br><code>docker compose exec -it identity python -m app.cli create-admin admin@example.com</code></li>
+<li>Import the collection into Postman and use <b>Run collection</b> on folders 1-9 with a delay of about 2500 ms (publishing, parsing and scoring run in the background).</li>
+<li>Running it again? Change <code>candidateEmail</code> and <code>recruiterEmail</code> (an email registers only once: 409).</li>
+</ol></div>
+<div class="box"><h3>How to read the steps</h3><ul>
+<li>Paths are relative to the gateway, <code>http://localhost:8000</code>. <span class="var">{{values}}</span> are collection variables, saved by earlier steps ("Saves").</li>
+<li>The coloured tag is the token to send as <code>Authorization: Bearer …</code>. Refresh and logout use the <code>refresh_token</code> cookie set by login (Postman keeps it; with curl use <code>-c jar -b jar</code>).</li>
+<li>Every error has the shape <code>{"error": {"code", "message", "request_id", "details?"}}</code>.</li>
+<li>Watch the background work in Temporal UI <a href="http://localhost:8088">:8088</a>, Kafka UI <a href="http://localhost:8085">:8085</a>, Mailpit <a href="http://localhost:8025">:8025</a>, Jaeger <a href="http://localhost:16686">:16686</a>, Grafana <a href="http://localhost:3001">:3001</a>.</li>
+</ul></div>
+</div>
+</header>
+<section class="folder" id="f-1-auth"><h2>1 Auth</h2><article class="step" id="step-1"><h3><span class="num">1</span>Register (candidate)<a class="anchor" href="#step-1" aria-label="Link to step 1">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/auth/register</code><span class="tok t-none">no token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "email": "<span class="var">{{candidateEmail}}</span>",
+  "password": "<span class="var">{{password}}</span>",
+  "full_name": "Ali Khan",
+  "roles": [
+    "CANDIDATE"
+  ]
+}</code></pre></div><div class="desc"><p><b>Role:</b> public (no token). Body: <code>full_name</code> (required), <code>current_company</code> (optional), <code>roles</code> (one or both of CANDIDATE, RECRUITER; never ADMIN).</p><p><b>Success:</b> 201 Created, body <code>{id, full_name, current_company, roles, ...}</code>. Saves <code>id</code> into <code>candidateId</code>.</p></div><p class="saves">Saves <code>candidateId</code></p></article><article class="step" id="step-2"><h3><span class="num">2</span>Register (recruiter)<a class="anchor" href="#step-2" aria-label="Link to step 2">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/auth/register</code><span class="tok t-none">no token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "email": "<span class="var">{{recruiterEmail}}</span>",
+  "password": "<span class="var">{{password}}</span>",
+  "full_name": "Jane Recruiter",
+  "current_company": "Acme",
+  "roles": [
+    "RECRUITER"
+  ]
+}</code></pre></div><div class="desc"><p><b>Role:</b> public (no token). Same body as any registration: <code>full_name</code>, optional <code>current_company</code> (current employer), <code>roles</code>.</p><p><b>Success:</b> 201 Created.</p></div></article><article class="step" id="step-3"><h3><span class="num">3</span>Login (candidate)<a class="anchor" href="#step-3" aria-label="Link to step 3">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/auth/login</code><span class="tok t-none">no token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "email": "<span class="var">{{candidateEmail}}</span>",
+  "password": "<span class="var">{{password}}</span>"
+}</code></pre></div><div class="desc"><p><b>Role:</b> public (no token). Rate limit: 30/min per IP.</p><p><b>Success:</b> 200 OK, body <code>{access_token, ...}</code> and sets the httpOnly, Secure <code>refresh_token</code> cookie (path <code>/api/identity/auth</code>). Saves <code>access_token</code> into <code>candidateToken</code>.</p></div><p class="saves">Saves <code>candidateToken</code></p></article><article class="step" id="step-4"><h3><span class="num">4</span>Login (recruiter)<a class="anchor" href="#step-4" aria-label="Link to step 4">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/auth/login</code><span class="tok t-none">no token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "email": "<span class="var">{{recruiterEmail}}</span>",
+  "password": "<span class="var">{{password}}</span>"
+}</code></pre></div><div class="desc"><p><b>Role:</b> public (no token). Rate limit: 30/min per IP.</p><p><b>Success:</b> 200 OK, body <code>{access_token, ...}</code> and sets the httpOnly, Secure <code>refresh_token</code> cookie (path <code>/api/identity/auth</code>). Saves <code>access_token</code> into <code>recruiterToken</code>.</p></div><p class="saves">Saves <code>recruiterToken</code></p></article><article class="step" id="step-5"><h3><span class="num">5</span>Refresh access token<a class="anchor" href="#step-5" aria-label="Link to step 5">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/auth/refresh</code><span class="tok t-none">no token</span></div><div class="desc"><p><b>Role:</b> public; authenticated by the httpOnly, Secure <code>refresh_token</code> cookie (path <code>/api/identity/auth</code>) set by Login. Postman's cookie jar keeps and sends it automatically; the cookie belongs to the most recent Login.</p><p><b>Success:</b> 200 OK, new <code>access_token</code>.</p></div></article><article class="step" id="step-6"><h3><span class="num">6</span>Get current user<a class="anchor" href="#step-6" aria-label="Link to step 6">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/identity/users/me</code><span class="tok t-cand">candidate token</span></div><div class="desc"><p><b>Role:</b> any authenticated user (uses <code>candidateToken</code>).</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-7"><h3><span class="num">7</span>Update my name or employer<a class="anchor" href="#step-7" aria-label="Link to step 7">#</a></h3><div class="req"><span class="m m-patch">PATCH</span><code class="path">/api/identity/users/me</code><span class="tok t-cand">candidate token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "full_name": "Ali Khan",
+  "current_company": "Freelance"
+}</code></pre></div><div class="desc"><p><b>Role:</b> any authenticated user (uses <code>candidateToken</code>). Send only the fields to change; <code>current_company: null</code> clears it.</p><p><b>Success:</b> 200 OK; emits <code>UserProfileUpdated</code> (field names only). The token's <code>name</code> claim changes on the next refresh.</p></div></article><article class="step" id="step-8"><h3><span class="num">8</span>Recruiter adds the CANDIDATE role<a class="anchor" href="#step-8" aria-label="Link to step 8">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/users/me/roles</code><span class="tok t-rec">recruiter token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "role": "CANDIDATE"
+}</code></pre></div><div class="desc"><p><b>Role:</b> any authenticated user (uses <code>recruiterToken</code>). Adds CANDIDATE or RECRUITER to my own account (never ADMIN).</p><p><b>Success:</b> 201 Created (409 ROLE_ALREADY_HELD on a second run). Emits <code>RoleGranted</code>; Candidate creates the profile. Then run the next request: the current token does not have the new role yet.</p></div></article><article class="step" id="step-9"><h3><span class="num">9</span>Refresh recruiter token (after adding a role)<a class="anchor" href="#step-9" aria-label="Link to step 9">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/auth/refresh</code><span class="tok t-none">no token</span></div><div class="desc"><p><b>Role:</b> public; uses the refresh cookie of the MOST RECENT login, so run "Login (recruiter)" before "Recruiter adds the CANDIDATE role".</p><p><b>Success:</b> 200 OK. Saves <code>access_token</code> into <code>recruiterToken</code>; its <code>roles</code> claim now lists CANDIDATE and RECRUITER.</p></div><p class="saves">Saves <code>recruiterToken</code></p></article><article class="step" id="step-10"><h3><span class="num">10</span>JWKS<a class="anchor" href="#step-10" aria-label="Link to step 10">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/identity/.well-known/jwks.json</code><span class="tok t-none">no token</span></div><div class="desc"><p><b>Role:</b> public (no token). Identity's public signing keys.</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-11"><h3><span class="num">11</span>OpenID configuration<a class="anchor" href="#step-11" aria-label="Link to step 11">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/identity/.well-known/openid-configuration</code><span class="tok t-none">no token</span></div><div class="desc"><p><b>Role:</b> public (no token).</p><p><b>Success:</b> 200 OK.</p></div></article></section>
+<section class="folder" id="f-2-jobs-recruiter"><h2>2 Jobs (recruiter)</h2><article class="step" id="step-12"><h3><span class="num">12</span>Create job<a class="anchor" href="#step-12" aria-label="Link to step 12">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/jobs</code><span class="tok t-rec">recruiter token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "title": "Senior Backend Engineer",
+  "description": "Build and operate Python microservices.",
+  "location": "Islamabad",
+  "employment_type": "FULL_TIME",
+  "required_skills": [
+    "python",
+    "fastapi",
+    "postgresql"
+  ],
+  "eligibility_rules": {
+    "min_experience_years": 2
+  },
+  "application_limit": 100,
+  "deadline": "<span class="var">{{deadline}}</span>",
+  "stages": [
+    "Screening",
+    "Interview",
+    "Offer"
+  ]
+}</code></pre></div><div class="desc"><p><b>Role:</b> RECRUITER.</p><p><b>Success:</b> 201 Created, job in status DRAFT. Saves <code>id</code> into <code>jobId</code>.</p></div><p class="saves">Saves <code>jobId</code> <code>jobVersion</code></p></article><article class="step" id="step-13"><h3><span class="num">13</span>List my jobs<a class="anchor" href="#step-13" aria-label="Link to step 13">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/jobs?mine=true</code><span class="tok t-rec">recruiter token</span></div><div class="desc"><p><b>Role:</b> RECRUITER (<code>mine=true</code> returns the recruiter's own jobs, including drafts).</p><p><b>Success:</b> 200 OK, <code>{items, next_cursor}</code>.</p></div></article><article class="step" id="step-14"><h3><span class="num">14</span>Get job<a class="anchor" href="#step-14" aria-label="Link to step 14">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/jobs/<span class="var">{{jobId}}</span></code><span class="tok t-rec">recruiter token</span></div><div class="desc"><p><b>Role:</b> public for READY/CLOSED jobs; owner otherwise (uses <code>recruiterToken</code>).</p><p><b>Success:</b> 200 OK.</p></div><p class="saves">Saves <code>jobVersion</code></p></article><article class="step" id="step-15"><h3><span class="num">15</span>Update job<a class="anchor" href="#step-15" aria-label="Link to step 15">#</a></h3><div class="req"><span class="m m-put">PUT</span><code class="path">/api/jobs/<span class="var">{{jobId}}</span></code><span class="tok t-rec">recruiter token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "title": "Senior Backend Engineer",
+  "description": "Build and operate Python microservices with Kafka.",
+  "location": "Islamabad",
+  "employment_type": "FULL_TIME",
+  "required_skills": [
+    "python",
+    "fastapi",
+    "postgresql"
+  ],
+  "eligibility_rules": {
+    "min_experience_years": 2
+  },
+  "application_limit": 100,
+  "deadline": "<span class="var">{{deadline}}</span>",
+  "stages": [
+    "Screening",
+    "Interview",
+    "Offer"
+  ],
+  "version": <span class="var">{{jobVersion}}</span>
+}</code></pre></div><div class="desc"><p><b>Role:</b> RECRUITER (owner). Same body as Create plus <code>version</code> (optimistic lock).</p><p><b>Success:</b> 200 OK.</p><p><code>version</code> comes from <code>jobVersion</code> (saved by Create job / Get job / Update job): run Get job first if the job changed since.</p></div><p class="saves">Saves <code>jobVersion</code></p></article><article class="step" id="step-16"><h3><span class="num">16</span>Publish job<a class="anchor" href="#step-16" aria-label="Link to step 16">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/jobs/<span class="var">{{jobId}}</span>/publish</code><span class="tok t-rec">recruiter token</span></div><div class="desc"><p><b>Role:</b> RECRUITER (owner).</p><p><b>Success:</b> 202 Accepted; status PROCESSING, then READY when the publishing workflow completes.</p></div></article><article class="step" id="step-17"><h3><span class="num">17</span>List jobs (public)<a class="anchor" href="#step-17" aria-label="Link to step 17">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/jobs</code><span class="tok t-none">no token</span></div><div class="desc"><p><b>Role:</b> public (no token).</p><p><b>Success:</b> 200 OK, <code>{items, next_cursor}</code>.</p></div></article></section>
+<section class="folder" id="f-3-candidate-profile-resume"><h2>3 Candidate profile &amp; resume</h2><article class="step" id="step-18"><h3><span class="num">18</span>Get my profile<a class="anchor" href="#step-18" aria-label="Link to step 18">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/candidates/me</code><span class="tok t-cand">candidate token</span></div><div class="desc"><p><b>Role:</b> CANDIDATE.</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-19"><h3><span class="num">19</span>Update my profile<a class="anchor" href="#step-19" aria-label="Link to step 19">#</a></h3><div class="req"><span class="m m-put">PUT</span><code class="path">/api/candidates/me</code><span class="tok t-cand">candidate token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "headline": "Backend developer",
+  "skills": [
+    "python",
+    "fastapi",
+    "postgresql"
+  ],
+  "experience_years": 3,
+  "education": [
+    {
+      "institution": "NUST",
+      "degree": "BS",
+      "field": "Computer Science",
+      "start_year": 2017,
+      "end_year": 2021
+    }
+  ]
+}</code></pre></div><div class="desc"><p><b>Role:</b> CANDIDATE.</p><p><b>Success:</b> 200 OK.</p><p>No <code>full_name</code> here: the name lives in Identity (PATCH /identity/users/me).</p></div></article><article class="step" id="step-20"><h3><span class="num">20</span>Upload resume<a class="anchor" href="#step-20" aria-label="Link to step 20">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/candidates/me/resumes</code><span class="tok t-cand">candidate token</span></div><p class="fd">Body (form-data): <code>file</code> = files/Ali_Khan_Sample_Resume.pdf</p><div class="desc"><p><b>Role:</b> CANDIDATE. form-data field <code>file</code> (PDF or DOCX, max 5 MB).</p><p><b>Success:</b> 202 Accepted; the resume is parsed in the background.</p><p>The file is <code>postman/files/Ali_Khan_Sample_Resume.pdf</code> (fictional). If Postman can't find it, pick it again in the Body tab, or set Settings &gt; Working directory to the repo's <code>postman/</code> folder.</p></div></article><article class="step" id="step-21"><h3><span class="num">21</span>List my resumes<a class="anchor" href="#step-21" aria-label="Link to step 21">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/candidates/me/resumes</code><span class="tok t-cand">candidate token</span></div><div class="desc"><p><b>Role:</b> CANDIDATE.</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-22"><h3><span class="num">22</span>Get candidate<a class="anchor" href="#step-22" aria-label="Link to step 22">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/candidates/<span class="var">{{candidateId}}</span></code><span class="tok t-cand">candidate token</span></div><div class="desc"><p><b>Role:</b> the candidate themselves, RECRUITER, or ADMIN (uses <code>candidateToken</code>).</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-23"><h3><span class="num">23</span>Get resume download link<a class="anchor" href="#step-23" aria-label="Link to step 23">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/candidates/<span class="var">{{candidateId}}</span>/resume/link</code><span class="tok t-cand">candidate token</span></div><div class="desc"><p><b>Role:</b> the candidate themselves, RECRUITER, or ADMIN (uses <code>candidateToken</code>).</p><p><b>Success:</b> 200 OK, <code>{url, expires_in}</code> (presigned URL, valid 5 minutes).</p></div></article></section>
+<section class="folder" id="f-4-applications-candidate"><h2>4 Applications (candidate)</h2><article class="step" id="step-24"><h3><span class="num">24</span>Apply<a class="anchor" href="#step-24" aria-label="Link to step 24">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/applications</code><span class="tok t-cand">candidate token</span></div><p class="hdrs">Headers: <code>Idempotency-Key: <span class="var">{{idempotencyKey}}</span></code></p><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "job_id": "<span class="var">{{jobId}}</span>"
+}</code></pre></div><div class="desc"><p><b>Role:</b> CANDIDATE. Header <code>Idempotency-Key</code> required; the pre-request script generates a fresh <code>{{$guid}}</code> and stores it in <code>idempotencyKey</code>.</p><p><b>Success:</b> 202 Accepted. Saves <code>id</code> into <code>applicationId</code>.</p></div><p class="saves">Saves <code>applicationId</code> <code>applicationVersion</code></p></article><article class="step" id="step-25"><h3><span class="num">25</span>Apply again (same key)<a class="anchor" href="#step-25" aria-label="Link to step 25">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/applications</code><span class="tok t-cand">candidate token</span></div><p class="hdrs">Headers: <code>Idempotency-Key: <span class="var">{{idempotencyKey}}</span></code></p><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "job_id": "<span class="var">{{jobId}}</span>"
+}</code></pre></div><div class="desc"><p><b>Role:</b> CANDIDATE. Reuses the first Apply request's <code>Idempotency-Key</code> (stored in <code>idempotencyKey</code> by that request's pre-request script) instead of generating a new one. The service returns the same application as the first call.</p><p><b>Success:</b> 202 Accepted (same response as the first Apply).</p></div></article><article class="step" id="step-26"><h3><span class="num">26</span>Apply to my own job (blocked)<a class="anchor" href="#step-26" aria-label="Link to step 26">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/applications</code><span class="tok t-rec">recruiter token</span></div><p class="hdrs">Headers: <code>Idempotency-Key: <span class="var">{{idempotencyKey}}</span></code></p><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "job_id": "<span class="var">{{jobId}}</span>"
+}</code></pre></div><div class="desc"><p><b>Role:</b> CANDIDATE, but uses <code>recruiterToken</code> after "Recruiter adds the CANDIDATE role" + "Refresh recruiter token": the recruiter now holds CANDIDATE and tries to apply to <code>jobId</code>, which they posted.</p><p><b>Expected:</b> 403 <code>CANNOT_APPLY_TO_OWN_JOB</code>.</p></div></article><article class="step" id="step-27"><h3><span class="num">27</span>List my applications<a class="anchor" href="#step-27" aria-label="Link to step 27">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/applications/me</code><span class="tok t-cand">candidate token</span></div><div class="desc"><p><b>Role:</b> CANDIDATE.</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-28"><h3><span class="num">28</span>Get application<a class="anchor" href="#step-28" aria-label="Link to step 28">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/applications/<span class="var">{{applicationId}}</span></code><span class="tok t-cand">candidate token</span></div><div class="desc"><p><b>Role:</b> the applicant or the job owner (uses <code>candidateToken</code>).</p><p><b>Success:</b> 200 OK, includes stage history.</p></div><p class="saves">Saves <code>applicationVersion</code></p></article></section>
+<section class="folder" id="f-5-applications-recruiter"><h2>5 Applications (recruiter)</h2><article class="step" id="step-29"><h3><span class="num">29</span>Recruiter board<a class="anchor" href="#step-29" aria-label="Link to step 29">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/jobs/<span class="var">{{jobId}}</span>/applications</code><span class="tok t-rec">recruiter token</span></div><div class="desc"><p><b>Role:</b> RECRUITER (job owner). Routed by the gateway to the Application service.</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-30"><h3><span class="num">30</span>Change stage<a class="anchor" href="#step-30" aria-label="Link to step 30">#</a></h3><div class="req"><span class="m m-patch">PATCH</span><code class="path">/api/applications/<span class="var">{{applicationId}}</span>/stage</code><span class="tok t-rec">recruiter token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "to_stage": "Interview",
+  "version": <span class="var">{{applicationVersion}}</span>,
+  "reason": "Strong skills match"
+}</code></pre></div><div class="desc"><p><b>Role:</b> RECRUITER (job owner). <code>version</code> is the optimistic lock.</p><p><b>Success:</b> 200 OK.</p><p><code>version</code> comes from <code>applicationVersion</code>: run Get application first (scoring moves the application to SCREENING, which changes its version).</p></div><p class="saves">Saves <code>applicationVersion</code></p></article><article class="step" id="step-31"><h3><span class="num">31</span>Add note<a class="anchor" href="#step-31" aria-label="Link to step 31">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/applications/<span class="var">{{applicationId}}</span>/notes</code><span class="tok t-rec">recruiter token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "body": "Good communication in the first call."
+}</code></pre></div><div class="desc"><p><b>Role:</b> RECRUITER (job owner).</p><p><b>Success:</b> 201 Created.</p></div></article><article class="step" id="step-32"><h3><span class="num">32</span>Make decision<a class="anchor" href="#step-32" aria-label="Link to step 32">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/applications/<span class="var">{{applicationId}}</span>/decision</code><span class="tok t-rec">recruiter token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "decision": "HIRED",
+  "version": <span class="var">{{applicationVersion}}</span>,
+  "reason": "Passed all stages"
+}</code></pre></div><div class="desc"><p><b>Role:</b> RECRUITER (job owner). <code>decision</code> is HIRED or REJECTED; <code>version</code> is the optimistic lock.</p><p><b>Success:</b> 200 OK.</p><p><code>version</code> comes from <code>applicationVersion</code>: run Get application first (scoring moves the application to SCREENING, which changes its version).</p></div></article></section>
+<section class="folder" id="f-6-bff-screens"><h2>6 BFF screens</h2><article class="step" id="step-33"><h3><span class="num">33</span>Application detail screen<a class="anchor" href="#step-33" aria-label="Link to step 33">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/bff/applications/<span class="var">{{applicationId}}</span></code><span class="tok t-rec">recruiter token</span></div><div class="desc"><p><b>Role:</b> the applicant or the job owner (uses <code>recruiterToken</code>).</p><p><b>Success:</b> 200 OK, <code>{application, candidate, score, resume_download, degraded: [..]}</code>.</p></div></article><article class="step" id="step-34"><h3><span class="num">34</span>Recruiter dashboard<a class="anchor" href="#step-34" aria-label="Link to step 34">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/bff/recruiter/dashboard</code><span class="tok t-rec">recruiter token</span></div><div class="desc"><p><b>Role:</b> RECRUITER.</p><p><b>Success:</b> 200 OK, <code>{jobs, metrics, degraded}</code>.</p></div></article></section>
+<section class="folder" id="f-7-analytics"><h2>7 Analytics</h2><article class="step" id="step-35"><h3><span class="num">35</span>Metrics<a class="anchor" href="#step-35" aria-label="Link to step 35">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">/api/analytics/metrics</code><span class="tok t-rec">recruiter token</span></div><div class="desc"><p><b>Role:</b> RECRUITER or ADMIN (uses <code>recruiterToken</code>).</p><p><b>Success:</b> 200 OK.</p></div></article></section>
+<section class="folder" id="f-8-wrap-up-run-last"><h2>8 Wrap up (run last)</h2><p class="note">Ends the demo: close the job, try to withdraw, log out. Run after folders 1-7.</p><article class="step" id="step-36"><h3><span class="num">36</span>Close job<a class="anchor" href="#step-36" aria-label="Link to step 36">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/jobs/<span class="var">{{jobId}}</span>/close</code><span class="tok t-rec">recruiter token</span></div><div class="desc"><p><b>Role:</b> RECRUITER (owner). Success: 200 OK. Applications still SUBMITTED are closed; ones the recruiter already acted on keep their state.</p></div></article><article class="step" id="step-37"><h3><span class="num">37</span>Withdraw application<a class="anchor" href="#step-37" aria-label="Link to step 37">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/applications/<span class="var">{{applicationId}}</span>/withdraw</code><span class="tok t-cand">candidate token</span></div><div class="desc"><p><b>Role:</b> CANDIDATE (the applicant). Success: 200 OK while the application is active. In a full run the recruiter has already made a decision (folder 5), so this returns 409: a HIRED/REJECTED application is final.</p></div></article><article class="step" id="step-38"><h3><span class="num">38</span>Logout all sessions<a class="anchor" href="#step-38" aria-label="Link to step 38">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/auth/logout-all</code><span class="tok t-cand">candidate token</span></div><div class="desc"><p><b>Role:</b> any authenticated user (uses <code>candidateToken</code>). Revokes all sessions.</p><p><b>Success:</b> 204 No Content. Demo: run at the end.</p></div></article><article class="step" id="step-39"><h3><span class="num">39</span>Logout<a class="anchor" href="#step-39" aria-label="Link to step 39">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/auth/logout</code><span class="tok t-none">no token</span></div><div class="desc"><p><b>Role:</b> public; authenticated by the httpOnly, Secure <code>refresh_token</code> cookie (path <code>/api/identity/auth</code>) set by Login. Postman's cookie jar keeps and sends it automatically.</p><p><b>Success:</b> 204 No Content. Demo: run at the end.</p></div></article></section>
+<section class="folder" id="f-9-admin"><h2>9 Admin</h2><article class="step" id="step-40"><h3><span class="num">40</span>Login (admin)<a class="anchor" href="#step-40" aria-label="Link to step 40">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/auth/login</code><span class="tok t-none">no token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "email": "<span class="var">{{adminEmail}}</span>",
+  "password": "<span class="var">{{password}}</span>"
+}</code></pre></div><div class="desc"><p><b>Role:</b> public (no token). Admins can't self-register: create one first with <code>docker compose exec -it identity python -m app.cli create-admin admin@example.com</code> (same password as <code>password</code>, or edit it here).</p><p><b>Success:</b> 200 OK. Saves <code>access_token</code> into <code>adminToken</code>.</p></div><p class="saves">Saves <code>adminToken</code></p></article><article class="step" id="step-41"><h3><span class="num">41</span>Revoke access token (by jti)<a class="anchor" href="#step-41" aria-label="Link to step 41">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/auth/revoke/:jti</code><span class="tok t-adm">admin token</span></div><div class="desc"><p><b>Role:</b> ADMIN. Revokes ONE access token: the pre-request script takes the jti from <code>candidateToken</code>. Success: 204 No Content; that token now gets 401 at the gateway.</p></div></article><article class="step" id="step-42"><h3><span class="num">42</span>Suspend user<a class="anchor" href="#step-42" aria-label="Link to step 42">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/users/<span class="var">{{candidateId}}</span>/suspend</code><span class="tok t-adm">admin token</span></div><div class="desc"><p><b>Role:</b> ADMIN. Uses <code>candidateId</code> (equal to the Identity user id) as the target.</p><p><b>Success:</b> 204 No Content.</p></div></article><article class="step" id="step-43"><h3><span class="num">43</span>Grant a role<a class="anchor" href="#step-43" aria-label="Link to step 43">#</a></h3><div class="req"><span class="m m-post">POST</span><code class="path">/api/identity/users/<span class="var">{{candidateId}}</span>/roles</code><span class="tok t-adm">admin token</span></div><div class="code"><button class="copy" type="button">Copy</button><pre><code>{
+  "role": "RECRUITER"
+}</code></pre></div><div class="desc"><p><b>Role:</b> ADMIN. Grants any role (ADMIN included) to <code>candidateId</code>.</p><p><b>Success:</b> 201 Created (409 ROLE_ALREADY_HELD). Emits <code>RoleGranted</code>.</p></div></article><article class="step" id="step-44"><h3><span class="num">44</span>Revoke a role<a class="anchor" href="#step-44" aria-label="Link to step 44">#</a></h3><div class="req"><span class="m m-delete">DELETE</span><code class="path">/api/identity/users/<span class="var">{{candidateId}}</span>/roles/RECRUITER</code><span class="tok t-adm">admin token</span></div><div class="desc"><p><b>Role:</b> ADMIN. Takes the role away and bumps <code>token_version</code> + sets <code>revoked_before</code>: the user's current tokens stop working everywhere; they log in again or refresh.</p><p><b>Success:</b> 204 No Content (404 ROLE_NOT_HELD; 409 LAST_ROLE if it is their only role). Emits <code>RoleRevoked</code>.</p></div></article></section>
+<section class="folder" id="f-10-internal-service-to-service-not-via-gateway"><h2>10 Internal (service-to-service, NOT via gateway)</h2><p class="note">Direct service URLs inside the local environment. These endpoints are not exposed through the gateway and take no token.<br>Not part of the flow: these call services directly (not through the gateway), for debugging. Paths are full URLs.</p><article class="step" id="step-45"><h3><span class="num">45</span>Identity: user contact<a class="anchor" href="#step-45" aria-label="Link to step 45">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">http://localhost:8001/internal/users/<span class="var">{{candidateId}}</span>/contact</code><span class="tok t-none">no token</span></div><div class="desc"><p>Internal service-to-service endpoint. Not exposed through the gateway; no token. Called by Notification.</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-46"><h3><span class="num">46</span>Candidate: resume for scoring<a class="anchor" href="#step-46" aria-label="Link to step 46">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">http://localhost:8004/internal/candidates/<span class="var">{{candidateId}}</span>/resume</code><span class="tok t-none">no token</span></div><div class="desc"><p>Internal service-to-service endpoint. Not exposed through the gateway; no token. Called by Scoring.</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-47"><h3><span class="num">47</span>Job Enrichment: structured job<a class="anchor" href="#step-47" aria-label="Link to step 47">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">http://localhost:8003/jobs/<span class="var">{{jobId}}</span>/structured</code><span class="tok t-none">no token</span></div><div class="desc"><p>Internal service-to-service endpoint. Not exposed through the gateway; no token.</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-48"><h3><span class="num">48</span>Job Enrichment: search jobs<a class="anchor" href="#step-48" aria-label="Link to step 48">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">http://localhost:8003/search/jobs?q=python</code><span class="tok t-none">no token</span></div><div class="desc"><p>Internal service-to-service endpoint. Not exposed through the gateway; no token.</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-49"><h3><span class="num">49</span>Scoring: score<a class="anchor" href="#step-49" aria-label="Link to step 49">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">http://localhost:8006/scores/<span class="var">{{applicationId}}</span></code><span class="tok t-none">no token</span></div><div class="desc"><p>Internal service-to-service endpoint. Not exposed through the gateway; no token. Called by the BFF.</p><p><b>Success:</b> 200 OK.</p></div></article><article class="step" id="step-50"><h3><span class="num">50</span>Application: board summary<a class="anchor" href="#step-50" aria-label="Link to step 50">#</a></h3><div class="req"><span class="m m-get">GET</span><code class="path">http://localhost:8005/jobs/<span class="var">{{jobId}}</span>/applications/summary</code><span class="tok t-none">no token</span></div><div class="desc"><p>Internal service-to-service endpoint. Not exposed through the gateway; no token. Called by the BFF. Application runs 2 replicas without a host port; call it from inside the Compose network.</p><p><b>Success:</b> 200 OK.</p></div></article></section>
+</main>
+<script>
+(() => {
+const side = document.getElementById('side');
+const menu = document.querySelector('.menu');
+menu.addEventListener('click', () => { const open = side.classList.toggle('open'); menu.setAttribute('aria-expanded', open); });
+side.addEventListener('click', e => { if (e.target.closest('a[href^="#"]')) { side.classList.remove('open'); menu.setAttribute('aria-expanded', 'false'); } });
+
+// Copy a request body (with {{variables}} as Postman expects them)
+document.querySelectorAll('.copy').forEach(b => b.addEventListener('click', async () => {
+  const text = b.nextElementSibling.textContent;
+  try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; }
+  catch { getSelection().selectAllChildren(b.nextElementSibling); b.textContent = 'Press Ctrl/⌘ C'; }
+  setTimeout(() => { b.textContent = 'Copy'; }, 1500);
+}));
+
+// Filter steps (and their sidebar links) by any text in the card
+const steps = [...document.querySelectorAll('.step')];
+const links = [...side.querySelectorAll('a[href^="#step-"]')];
+const found = document.getElementById('found');
+document.getElementById('find').addEventListener('input', e => {
+  const q = e.target.value.trim().toLowerCase();
+  let shown = 0;
+  steps.forEach((s, i) => { const hit = !q || s.textContent.toLowerCase().includes(q); s.classList.toggle('hide', !hit); links[i].classList.toggle('hide', !hit); shown += hit; });
+  document.querySelectorAll('.folder').forEach(f => f.classList.toggle('hide', !f.querySelector('.step:not(.hide)')));
+  side.querySelectorAll('.ng').forEach(g => g.classList.toggle('hide', !side.querySelector(`a[data-group="${g.dataset.group}"]:not(.hide)`)));
+  found.textContent = q ? `${shown} of ${steps.length} steps` : '';
+  spy();
+});
+
+// Highlight the step being read: the last one whose top has passed a line 30% down the screen
+const progress = document.createElement('div'); progress.className = 'progress'; document.body.prepend(progress);
+const totop = document.createElement('button'); totop.className = 'totop'; totop.type = 'button'; totop.textContent = '↑ Top';
+totop.addEventListener('click', () => { window.scrollTo({top: 0}); history.replaceState(null, '', location.pathname); });
+document.body.appendChild(totop);
+let current = null, ticking = false;
+function spy() {
+  ticking = false;
+  const line = window.innerHeight * 0.3, visible = steps.filter(s => !s.classList.contains('hide'));
+  let active = null;
+  for (const s of visible) { if (s.getBoundingClientRect().top <= line) active = s; else break; }
+  if (visible.length && window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) active = visible[visible.length - 1];
+  const id = active && active.id;
+  if (id !== current) {
+    current = id;
+    links.forEach(a => { const on = a.getAttribute('href') === '#' + id; a.classList.toggle('active', on); if (on) a.setAttribute('aria-current', 'true'); else a.removeAttribute('aria-current'); });
+    // Keep the active link visible inside the scrollable nav
+    const link = side.querySelector('a.active');
+    if (link) { const r = link.getBoundingClientRect(), sr = side.getBoundingClientRect(); if (r.top < sr.top + 60 || r.bottom > sr.bottom - 20) side.scrollTop += r.top - sr.top - sr.height / 3; }
+  }
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  progress.style.width = (max > 0 ? window.scrollY / max * 100 : 0) + '%';
+  totop.classList.toggle('show', window.scrollY > 800);
+}
+window.addEventListener('scroll', () => { if (!ticking) { ticking = true; requestAnimationFrame(spy); } }, {passive: true});
+window.addEventListener('resize', spy);
+spy();
+})();
+</script>
+</body></html>

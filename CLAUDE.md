@@ -748,3 +748,8 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
 - REPO HYGIENE (14R polish): README.md at the root; `docs/review/` (working AI prompts, outdated) and
   `*.postman_environment.json` (may hold real tokens) are gitignored; postman/ collection + fictional sample resume are
   committed.
+- DOCS SITE (2026-11-23): GitHub Pages serves `docs/` from main (https://baderbintahir.github.io/smarthire/; enabled in
+  repo Settings -> Pages). `docs/.nojekyll` is required (Jekyll's Liquid would eat `{{variables}}`); `docs/index.html`
+  redirects to architecture.html. `make api-walkthrough` writes BOTH api-walkthrough.md (GitHub) and
+  api-walkthrough.html (site; layout/CSS/JS in postman/walkthrough.template.html). The pages link each other through
+  the `.docsw` switcher at the top of each sidebar; keep its CSS identical in both.

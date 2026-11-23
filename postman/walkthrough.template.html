@@ -1,0 +1,161 @@
+<!doctype html>
+<!-- Template for docs/api-walkthrough.html. Edit this file, not the generated page: make api-walkthrough -->
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SmartHire API walkthrough</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Colours, fonts and the sidebar match architecture.html */
+:root{color-scheme:light;--paper:#FAFBFD;--panel:#FFFFFF;--ink:#1B2033;--muted:#5A6378;--line:#DDE1EA;--accent:#3C4FB5;--accent-soft:#EEF0FB;--amber:#B7791F;--amber-soft:#FDF0D8;--green:#2F855A;--green-soft:#E3F4EE;--code:#F1F3F8;--red:#B33A3A;--red-soft:#F9E1E1;}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--paper:#10131F;--panel:#171B2B;--ink:#E6E8F2;--muted:#A3AABD;--line:#2B3147;--accent:#9AA6F2;--accent-soft:#1F2544;--amber:#E2B15A;--amber-soft:#3A2D14;--green:#6FCF9C;--green-soft:#15302A;--code:#22283D;--red:#F09090;--red-soft:#3A1A1E;}}
+*{box-sizing:border-box}
+html{scroll-padding-top:24px}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 "IBM Plex Sans",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+a{color:var(--accent)}
+code{font:0.86em "IBM Plex Mono",ui-monospace,Consolas,monospace;background:var(--code);padding:0.1em 0.35em;border-radius:4px;overflow-wrap:anywhere}
+.side{position:fixed;inset:0 auto 0 0;width:270px;overflow-y:auto;border-right:1px solid var(--line);background:var(--panel);padding:22px 14px}
+.brand{font-weight:700;font-size:19px;margin:0 8px 2px}
+.brand+p{margin:0 8px 14px;color:var(--muted);font-size:13px}
+.side a{display:flex;gap:8px;padding:4px 8px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:14px;line-height:1.4}
+.side a .n{color:var(--muted);min-width:1.6em;text-align:right;font-variant-numeric:tabular-nums}
+.side a:hover,.side a:focus-visible{background:var(--accent-soft);color:var(--accent);outline:none}
+.side a.active{background:var(--accent-soft);color:var(--accent);font-weight:600;box-shadow:inset 3px 0 0 var(--accent)}
+.ng{margin:16px 8px 4px;color:var(--muted);font-size:13px;font-weight:600}
+.docsw{display:flex;gap:4px;margin:0 4px 14px;padding:3px;border:1px solid var(--line);border-radius:8px;background:var(--paper)}
+.side .docsw a,.docsw span{flex:1 1 0;white-space:nowrap;line-height:1.4;justify-content:center;text-align:center;padding:5px 4px;font-size:12.5px;border-radius:6px}
+.docsw span{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.find{margin:0 4px 4px}
+.find input{width:100%;font:inherit;font-size:14px;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--paper);color:var(--ink)}
+.find p{margin:4px 2px 0;color:var(--muted);font-size:12.5px;min-height:1.2em}
+.progress{position:fixed;top:0;left:0;height:3px;width:0;background:var(--accent);z-index:10}
+.totop{position:fixed;right:22px;bottom:22px;z-index:6;font:inherit;font-size:13.5px;padding:7px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--accent);cursor:pointer;opacity:0;pointer-events:none;transition:opacity .2s;box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.totop.show{opacity:1;pointer-events:auto}
+main{margin-left:270px;padding:40px 48px 80px;max-width:1080px}
+header{margin-bottom:40px}
+h1{font-size:clamp(28px,3.4vw,40px);line-height:1.15;margin:6px 0 14px;letter-spacing:-0.01em}
+h2{font-size:24px;margin:0 0 10px;padding-top:6px;border-top:2px solid var(--ink);display:inline-block}
+p,li{max-width:78ch}
+.kicker{color:var(--accent);font-weight:600;margin:0}
+.lede{font-size:18px;color:var(--muted)}
+.note{color:var(--muted);font-size:14.5px}
+.cols2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px}
+.box h3{margin:0 0 6px;font-size:16px}.box ol,.box ul{margin:0;padding-left:20px;font-size:14.5px}.box li{margin-bottom:4px}
+.folder{margin-bottom:48px}
+.step{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 18px 12px;margin:14px 0}
+.step:target{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.step h3{display:flex;align-items:center;gap:10px;font-size:17px;margin:0 0 8px}
+.num{display:inline-grid;place-items:center;min-width:28px;height:28px;padding:0 6px;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:13.5px;font-weight:700}
+.anchor{color:var(--muted);text-decoration:none;font-weight:400;opacity:0;transition:opacity .15s}
+.step h3:hover .anchor,.anchor:focus-visible{opacity:1}
+.req{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.req .path{font-size:14px;background:none;padding:0}
+.m{font:600 12px "IBM Plex Mono",monospace;padding:2px 6px;border-radius:4px}
+.m-get{background:var(--green-soft);color:var(--green)}.m-post{background:var(--accent-soft);color:var(--accent)}.m-put,.m-patch{background:var(--amber-soft);color:var(--amber)}.m-delete{background:var(--red-soft);color:var(--red)}
+.tok{margin-left:auto;font-size:12px;font-weight:600;padding:1px 9px;border-radius:999px;white-space:nowrap}
+.t-cand{background:var(--green-soft);color:var(--green)}.t-rec{background:var(--accent-soft);color:var(--accent)}.t-adm{background:var(--amber-soft);color:var(--amber)}.t-none{background:var(--code);color:var(--muted)}
+.var{color:var(--amber);font-weight:500}
+.hdrs,.fd,.saves{font-size:14px;margin:8px 0 0}
+.saves{color:var(--muted)}.saves code{color:var(--green)}
+.code{position:relative;margin:10px 0 0}
+.code pre{margin:0;padding:10px 14px;background:var(--code);border-radius:8px;overflow-x:auto;font:13px/1.5 "IBM Plex Mono",ui-monospace,Consolas,monospace}
+.code pre code{background:none;padding:0;font-size:inherit;overflow-wrap:normal}
+.copy{position:absolute;top:6px;right:6px;font:inherit;font-size:12px;color:var(--accent);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:2px 9px;cursor:pointer}
+.copy:hover,.copy:focus-visible{background:var(--accent-soft);outline:none}
+.desc{font-size:14.5px;margin-top:8px}.desc p{margin:4px 0}
+.hide{display:none!important}
+.menu{display:none}
+@media (max-width:900px){.side{transform:translateX(-100%);transition:transform .2s;z-index:5}.side.open{transform:none}main{margin-left:0;padding:24px 18px 60px}.menu{display:inline-block;position:sticky;top:0;z-index:6;margin:8px;font:inherit;padding:6px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink)}.cols2{grid-template-columns:1fr}.tok{margin-left:0}}
+@media (prefers-reduced-motion:reduce){.side{transition:none}}
+</style></head>
+<body>
+<button class="menu" type="button" aria-controls="side" aria-expanded="false">Contents</button>
+<nav class="side" id="side" aria-label="Contents">
+<div class="brand">SmartHire</div><p>Architecture and design docs</p>
+<div class="docsw"><a href="architecture.html">Architecture</a><span aria-current="page">API walkthrough</span></div>
+<div class="find"><input type="search" id="find" placeholder="Filter: name, path, variable…" aria-label="Filter steps"><p id="found" aria-live="polite"></p></div>
+<!--NAV-->
+</nav>
+<main>
+<header>
+<p class="kicker">API walkthrough</p>
+<h1>The whole flow, request by request</h1>
+<p class="lede">Every public API call in the order that tests the application end to end: register, publish a job, upload a resume, apply, get scored, get hired, then the admin tools. The flows behind each step are explained in the <a href="architecture.html#flows">architecture doc</a>.</p>
+<p class="note">Generated from <code>postman/SmartHire.postman_collection.json</code> by <code>make api-walkthrough</code>. Verified end to end with newman: 44 requests, 0 failures.</p>
+<div class="cols2">
+<div class="box"><h3>Before you start</h3><ol>
+<li><code>make up</code>, then wait until <code>make ps</code> shows the services healthy.</li>
+<li>Create an admin whose password matches the <code>password</code> variable (<code>ChangeMe123!</code>):<br><code>docker compose exec -it identity python -m app.cli create-admin admin@example.com</code></li>
+<li>Import the collection into Postman and use <b>Run collection</b> on folders 1-9 with a delay of about 2500 ms (publishing, parsing and scoring run in the background).</li>
+<li>Running it again? Change <code>candidateEmail</code> and <code>recruiterEmail</code> (an email registers only once: 409).</li>
+</ol></div>
+<div class="box"><h3>How to read the steps</h3><ul>
+<li>Paths are relative to the gateway, <code>http://localhost:8000</code>. <span class="var">{{values}}</span> are collection variables, saved by earlier steps ("Saves").</li>
+<li>The coloured tag is the token to send as <code>Authorization: Bearer …</code>. Refresh and logout use the <code>refresh_token</code> cookie set by login (Postman keeps it; with curl use <code>-c jar -b jar</code>).</li>
+<li>Every error has the shape <code>{"error": {"code", "message", "request_id", "details?"}}</code>.</li>
+<li>Watch the background work in Temporal UI <a href="http://localhost:8088">:8088</a>, Kafka UI <a href="http://localhost:8085">:8085</a>, Mailpit <a href="http://localhost:8025">:8025</a>, Jaeger <a href="http://localhost:16686">:16686</a>, Grafana <a href="http://localhost:3001">:3001</a>.</li>
+</ul></div>
+</div>
+</header>
+<!--STEPS-->
+</main>
+<script>
+(() => {
+const side = document.getElementById('side');
+const menu = document.querySelector('.menu');
+menu.addEventListener('click', () => { const open = side.classList.toggle('open'); menu.setAttribute('aria-expanded', open); });
+side.addEventListener('click', e => { if (e.target.closest('a[href^="#"]')) { side.classList.remove('open'); menu.setAttribute('aria-expanded', 'false'); } });
+
+// Copy a request body (with {{variables}} as Postman expects them)
+document.querySelectorAll('.copy').forEach(b => b.addEventListener('click', async () => {
+  const text = b.nextElementSibling.textContent;
+  try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; }
+  catch { getSelection().selectAllChildren(b.nextElementSibling); b.textContent = 'Press Ctrl/⌘ C'; }
+  setTimeout(() => { b.textContent = 'Copy'; }, 1500);
+}));
+
+// Filter steps (and their sidebar links) by any text in the card
+const steps = [...document.querySelectorAll('.step')];
+const links = [...side.querySelectorAll('a[href^="#step-"]')];
+const found = document.getElementById('found');
+document.getElementById('find').addEventListener('input', e => {
+  const q = e.target.value.trim().toLowerCase();
+  let shown = 0;
+  steps.forEach((s, i) => { const hit = !q || s.textContent.toLowerCase().includes(q); s.classList.toggle('hide', !hit); links[i].classList.toggle('hide', !hit); shown += hit; });
+  document.querySelectorAll('.folder').forEach(f => f.classList.toggle('hide', !f.querySelector('.step:not(.hide)')));
+  side.querySelectorAll('.ng').forEach(g => g.classList.toggle('hide', !side.querySelector(`a[data-group="${g.dataset.group}"]:not(.hide)`)));
+  found.textContent = q ? `${shown} of ${steps.length} steps` : '';
+  spy();
+});
+
+// Highlight the step being read: the last one whose top has passed a line 30% down the screen
+const progress = document.createElement('div'); progress.className = 'progress'; document.body.prepend(progress);
+const totop = document.createElement('button'); totop.className = 'totop'; totop.type = 'button'; totop.textContent = '↑ Top';
+totop.addEventListener('click', () => { window.scrollTo({top: 0}); history.replaceState(null, '', location.pathname); });
+document.body.appendChild(totop);
+let current = null, ticking = false;
+function spy() {
+  ticking = false;
+  const line = window.innerHeight * 0.3, visible = steps.filter(s => !s.classList.contains('hide'));
+  let active = null;
+  for (const s of visible) { if (s.getBoundingClientRect().top <= line) active = s; else break; }
+  if (visible.length && window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2) active = visible[visible.length - 1];
+  const id = active && active.id;
+  if (id !== current) {
+    current = id;
+    links.forEach(a => { const on = a.getAttribute('href') === '#' + id; a.classList.toggle('active', on); if (on) a.setAttribute('aria-current', 'true'); else a.removeAttribute('aria-current'); });
+    // Keep the active link visible inside the scrollable nav
+    const link = side.querySelector('a.active');
+    if (link) { const r = link.getBoundingClientRect(), sr = side.getBoundingClientRect(); if (r.top < sr.top + 60 || r.bottom > sr.bottom - 20) side.scrollTop += r.top - sr.top - sr.height / 3; }
+  }
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  progress.style.width = (max > 0 ? window.scrollY / max * 100 : 0) + '%';
+  totop.classList.toggle('show', window.scrollY > 800);
+}
+window.addEventListener('scroll', () => { if (!ticking) { ticking = true; requestAnimationFrame(spy); } }, {passive: true});
+window.addEventListener('resize', spy);
+spy();
+})();
+</script>
+</body></html>
