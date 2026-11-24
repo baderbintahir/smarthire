@@ -99,7 +99,7 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 13 Observability: [x] 13.1 jaeger/prometheus/grafana + /metrics · [x] 13.2 OTel chassis · [x] 13.3 async propagation · [x] 13.4 metrics · [x] 13.5 failures topic · [x] 13.6 dashboards · [x] 13.7 gateway telemetry · [x] 13.8 Kafka vs Temporal (chassis 101, all service suites pass, gateway 14, events e2e 15; break-its verified)
 - [ ] Phase 14 Reliability + load tests (tag v0.1-core): [x] 14.1 failure-path review · [x] 14.2 breakers + APISIX checks · [x] 14.3 backpressure · [x] 14.3b retention jobs · [x] 14.4 load test · [x] 14.5 chaos · [ ] 14.6 checkpoint (doc written; needs the user's screenshots, then tag v0.1-core)
 - [x] Phase 14R Review 1 changes (design v1.2, docs/architecture.html): [x] R0 plan sync · [x] R1 identity schema expand · [x] R2 chassis roles · [x] R3 identity roles/profile/events · [x] R4 refresh sessions in Redis · [x] R5 candidate · [x] R6 application · [x] R7 job/analytics/bff · [x] R8 contract migration · [x] R9 e2e + Postman
-- [ ] Phase 14T Temporal replaces Kafka and Celery (design v2.0): [x] T0 plan · [ ] T1 spike · [ ] T2 chassis · [ ] T3 analytics facts · [ ] T4 SendEmailWorkflow · [ ] T5 identity · [ ] T6 resumes · [ ] T7 jobs · [ ] T8 applications · [ ] T9 remove old path · [ ] T10 e2e + docs
+- [ ] Phase 14T Temporal replaces Kafka and Celery (design v2.0): [x] T0 plan · [x] T1 spike · [ ] T2 chassis · [ ] T3 analytics facts · [ ] T4 SendEmailWorkflow · [ ] T5 identity · [ ] T6 resumes · [ ] T7 jobs · [ ] T8 applications · [ ] T9 remove old path · [ ] T10 e2e + docs
 - [ ] Phase 15 Semantic index
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
@@ -765,3 +765,12 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   User's decisions: fail fast (not outbox->Temporal relay) and Celery moves to Temporal too. Architecture rules 3-5
   above describe the CURRENT code until v2.0 is implemented. Next: sync docs/implementation-plan.md (new phase), spike
   Update-with-Start + codec, then migrate in the order listed in the doc's "Design changes".
+- STEP T1 SPIKE (2026-11-24, examples/temporal_commit/commit_demo.py): Update-with-Start + USE_EXISTING + a `commit`
+  update works on server 1.32 / SDK 1.35. All 5 checks verified live (same id attaches, activity once; business
+  ApplicationError(type=code, details={"status"}) reaches the caller as WorkflowUpdateFailedError.cause; unreachable
+  server fails fast; worker down -> WorkflowUpdateRPCTimeoutOrCancelledError after rpc_timeout, commit happens when the
+  worker returns; AES-GCM codec -> history shows binary/encrypted). GOTCHAS for T2: import cryptography via
+  workflow.unsafe.imports_passed_through() (sandbox re-import fails); use rpc_timeout, not asyncio.wait_for; read
+  op.workflow_handle() after a timeout (else "Future exception was never retrieved"); check-and-set the committing flag
+  BEFORE any await in the update handler (wait_condition first let 3 parallel callers schedule the activity); changing
+  workflow code under a running history -> TMPRL1100 nondeterminism (seen live): use workflow.patched().
