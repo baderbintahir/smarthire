@@ -753,3 +753,14 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   redirects to architecture.html. `make api-walkthrough` writes BOTH api-walkthrough.md (GitHub) and
   api-walkthrough.html (site; layout/CSS/JS in postman/walkthrough.template.html). The pages link each other through
   the `.docsw` switcher at the top of each sidebar; keep its CSS identical in both.
+- DESIGN v2.0 (2026-11-24, DOCUMENTED ONLY, not implemented): docs/architecture.html now shows Temporal replacing Kafka,
+  Schema Registry, RabbitMQ and Celery. Workflow-first writes: a request whose change others react to starts a workflow
+  with Update-with-Start (conflict policy USE_EXISTING, id = natural key) and waits for its `commit` update (first
+  activity = the DB transaction); Temporal unreachable -> 503, nothing written; no answer in 10 s -> 503
+  STILL_PROCESSING. 8 workflows (Registration, RoleChange, JobPublishing, JobClosing, ResumeProcessing, Application,
+  ApplicationAction, SendEmail child with ABANDON), task queues identity/job/enrichment/candidate/resume
+  (candidate-worker)/application/scoring/notification/analytics-tq. Analytics keeps its own `facts` table via
+  `record_fact` (rebuild replays it). Payloads encrypted by a chassis codec; passwords hashed before a workflow starts.
+  User's decisions: fail fast (not outbox->Temporal relay) and Celery moves to Temporal too. Architecture rules 3-5
+  above describe the CURRENT code until v2.0 is implemented. Next: sync docs/implementation-plan.md (new phase), spike
+  Update-with-Start + codec, then migrate in the order listed in the doc's "Design changes".
