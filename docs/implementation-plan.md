@@ -959,6 +959,54 @@ Gateway and events e2e suites updated; Postman collection uses the new shapes (r
 
 ---
 
+# Phase 14T — Temporal replaces Kafka and Celery (design v2.0)
+
+**Goal:** bring the code to version 2.0 of `docs/architecture.html`: workflow-first writes (Update-with-Start, commit step first), follow-ups as activities, email as a child workflow, Analytics' own `facts` table; then remove Kafka, Schema Registry, RabbitMQ and Celery. Rationale and trade-offs: the doc's "Design changes", v2.0.
+
+The migration is a strangler: one flow at a time moves from "outbox + Kafka consumer" to "workflow". A flow's producer stops emitting its event in the same step that its workflow goes live, so an action is never handled by both paths (no double emails, no double counts). Kafka and Celery stay running until Step T9. The public API (paths, bodies, success codes) doesn't change; the new answers are 503 `TEMPORAL_UNAVAILABLE` and 503 `STILL_PROCESSING`.
+
+### Step T1 — Spike
+Standalone demo in `examples/temporal_commit/` (like the Step 9.2 hello world): a workflow with a `commit` update whose handler runs the commit activity once and returns the stored result; started with Update-with-Start, conflict policy `USE_EXISTING`; a business `ApplicationError` (non-retryable, with a code) reaching the caller; the 10-second wait; a payload codec that encrypts.
+**Done when:** shown live: (1) a second start with the same id attaches and gets the same result, the activity ran once; (2) a business error reaches the caller and the workflow ends with no effect; (3) Temporal stopped -> the caller fails fast; (4) worker stopped -> the caller times out, the workflow commits once the worker is back; (5) `temporal workflow show` displays encrypted payloads.
+
+### Step T2 — Chassis
+`temporal.py`: `start_and_commit(...)` (Update-with-Start + wait, maps outcomes to `AppError`: 503 `TEMPORAL_UNAVAILABLE` with Retry-After, 503 `STILL_PROCESSING`, business errors to their code and status), `business_error(code, status, message)` for activities, the encryption codec in `connect()` (key `secrets/temporal/payload.key`, made by `make keys`), worker helper for several workflows and activities per task queue. `contracts.py`: activity and workflow names and their typed inputs (dataclasses) shared by callers and workers.
+**Done when:** chassis tests cover every error mapping, the codec round trip, and that a wrong key can't decrypt.
+
+### Step T3 — Analytics facts
+Migration: `facts` (E.9). Projection updates refactored into one applier per fact kind; `record_fact` activity on `analytics-tq` (insert ON CONFLICT DO NOTHING, apply only if new, one transaction); rebuild replays `facts` ordered by `occurred_at`; `backfill-facts` CLI copies the existing history from the Kafka topics (fact_id = event_id) while Kafka still runs. The Kafka consumer stays until T9 and writes facts through the same appliers.
+**Done when:** after the backfill a rebuild from `facts` gives the same metrics as today; a repeated `record_fact` changes nothing.
+
+### Step T4 — Notification: SendEmailWorkflow
+`SendEmailWorkflow` on `notification-tq` (`prepare_email`, `send_email` with the circuit breaker, `mark_email_failed`); the worker runs in the notification service. The Kafka consumer and Celery worker stay for flows not yet moved.
+**Done when:** a started SendEmailWorkflow delivers to Mailpit; Mailpit stopped -> retries -> SENT after restart; the same id twice sends once.
+
+### Step T5 — Identity: registration and roles
+`RegistrationWorkflow` and `RoleChangeWorkflow` (worker on `identity-tq`); the API hashes the password and creates the user id before starting; Candidate's `create_candidate_profile` on `candidate-tq`; facts UserRegistered, RoleGranted, RoleRevoked. Identity stops writing these events and `UserProfileUpdated`; Candidate's and Analytics' consumers drop those handlers.
+**Done when:** register -> profile + fact; Temporal stopped -> 503 and no user row; grant/revoke as in W2.
+
+### Step T6 — Resumes
+`ResumeProcessingWorkflow` (`register_resume` on `candidate-tq`, `parse_resume` on `resume-tq`); `candidate-worker` runs a Temporal worker instead of Celery; ResumeUploaded and ResumeParsed stop.
+**Done when:** upload -> PARSED; Temporal stopped -> 503 and the MinIO object is deleted; an unreadable file -> FAILED without retries.
+
+### Step T7 — Jobs
+JobPublishingWorkflow becomes commit-first (`request_publish`, `edit_ready_job`) and calls `sync_job_replica` (Application, `source_version` guard), `record_fact` and SendEmailWorkflow; new `JobClosingWorkflow` with `close_job_applications`; the `job-publisher` consumer and the job events stop.
+**Done when:** publish -> READY with replica and email; enrichment down -> FAILED, compensated, replica FAILED; close -> SUBMITTED applications CLOSED and their workflows signalled.
+
+### Step T8 — Applications
+ApplicationWorkflow becomes commit-first (`submit`, id `application-{job}-{candidate}`) with emails and facts; `ApplicationActionWorkflow` for stage, decision, withdraw; Scoring drops its Mongo outbox (CandidateScored becomes a fact from the workflow); the application and notification consumers stop.
+**Done when:** apply -> SCREENING with score, 4 emails across the flow as before; quota race still exactly N; same Idempotency-Key -> same answer; Temporal stopped -> 503 and no row.
+
+### Step T9 — Remove the old path
+Contract migrations drop `outbox` and `processed_events` in every schema; remove Kafka, Schema Registry, Kafka UI, `kafka-init`, `schema-init`, RabbitMQ, Celery (workers, beat, dependencies), chassis `events`, `outbox`, `kafka`, `mongo_outbox`, `celery`, `event_catalog` and the event schemas, the outbox and processed_events retention jobs, `make schemas`, the Kafka/RabbitMQ alerts and dashboard panels; add alerts for failed workflows, retrying activities and schedule-to-start latency.
+**Done when:** `docker compose config` has no Kafka or RabbitMQ; every suite passes; schemas match Appendix E.
+
+### Step T10 — End to end and docs
+`tests/events` becomes `tests/workflows` (same scenarios plus Temporal-down 503 and worker-down STILL_PROCESSING); gateway suite; newman run of the Postman collection; load test and chaos (stop Temporal: writes 503, reads fine; stop one worker: its steps wait, then finish); README, CLAUDE.md rules 3-5, Appendices A, B, E synced.
+**Done when:** all of the above pass; the doc's v2.0 tags change from planned to implemented.
+
+---
+
 # Phase 15 — Semantic Index Service (Week 4, 2–3 days)
 
 **Goal:** jobs and resumes become searchable by meaning, and the data is ready for AI ranking and the assistant.
