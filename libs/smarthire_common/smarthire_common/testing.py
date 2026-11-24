@@ -194,3 +194,26 @@ class TokenFactory:
 
     def headers(self, **kwargs) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.mint(**kwargs)}"}
+
+
+class ServiceTokenFactory:
+    """Orchestrator tokens for tests of internal endpoints (design v2.1). Pass `key_provider` to the
+    service's create_app() (as `service_key_provider`), then call endpoints with `headers()`.
+
+        service_tokens = ServiceTokenFactory()
+        client.post("/internal/users", json=..., headers=service_tokens.headers(idempotency_key="wf-1:1"))
+    """
+
+    def __init__(self) -> None:
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        from smarthire_common.auth import StaticKeyProvider
+        from smarthire_common.service_auth import ServiceTokenSigner
+
+        self.signer = ServiceTokenSigner(rsa.generate_private_key(public_exponent=65537, key_size=2048))
+        self.key_provider = StaticKeyProvider({self.signer.kid: self.signer._key.public_key()})
+
+    def headers(self, *, idempotency_key: str | None = None) -> dict[str, str]:
+        import uuid
+
+        return {**self.signer.headers(), "Idempotency-Key": idempotency_key or f"test-{uuid.uuid4()}"}

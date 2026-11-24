@@ -18,6 +18,10 @@ class BaseServiceSettings(BaseSettings):
     jwt_issuer: str = "smarthire-identity"
     jwt_audience: str = "smarthire"
 
+    # --- Orchestrator (design v2.1): services start actions there; it calls their internal endpoints ---
+    orchestrator_url: str = "http://orchestrator:8012"
+    orchestrator_jwks_url: str = "http://orchestrator:8012/.well-known/jwks.json"  # keys of its service tokens
+
     # --- Events (Phase 7); only used by services that publish or consume ---
     kafka_bootstrap_servers: str = "kafka:19092"  # inside Compose; localhost:9092 from the host
     schema_registry_url: str = "http://schema-registry:8081"

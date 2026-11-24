@@ -81,6 +81,28 @@ class ServiceUnavailableError(AppError):
     code = "SERVICE_UNAVAILABLE"
 
 
+class WorkflowsUnavailableError(ServiceUnavailableError):
+    """503 (design v2.1): the orchestrator (or Temporal behind it) can't be reached, so the action was
+    never started: nothing was written and retrying is safe."""
+
+    code = "WORKFLOWS_UNAVAILABLE"
+
+    def __init__(self, message: str = "Workflows are temporarily unavailable; nothing was changed", **kwargs):
+        kwargs.setdefault("headers", {"Retry-After": "5"})
+        super().__init__(message, **kwargs)
+
+
+class StillProcessingError(ServiceUnavailableError):
+    """503 (design v2.1): the action may have started but gave no answer in time. It will finish on its
+    own; repeating the same request attaches to it and returns its answer."""
+
+    code = "STILL_PROCESSING"
+
+    def __init__(self, message: str = "Still processing; repeat the same request to get the result", **kwargs):
+        kwargs.setdefault("headers", {"Retry-After": "5"})
+        super().__init__(message, **kwargs)
+
+
 def _error_response(
     status: int, code: str, message: str, details=None, headers: dict[str, str] | None = None
 ) -> JSONResponse:
