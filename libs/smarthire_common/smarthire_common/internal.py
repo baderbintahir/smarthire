@@ -13,6 +13,7 @@ from fastapi import Header
 
 
 async def idempotency_key(
-    key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=300),
+    # Not named "key": endpoints often have a {key} path parameter, and FastAPI would mix the two up
+    idempotency_key_header: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=300),
 ) -> str:
-    return key
+    return idempotency_key_header

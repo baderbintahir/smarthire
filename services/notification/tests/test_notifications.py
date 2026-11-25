@@ -259,3 +259,47 @@ async def test_retention_deletes_only_old_sent_emails(database):
     async with db.session_scope() as s:
         left = (await s.execute(text("SELECT notification_key FROM notification_log ORDER BY 1"))).scalars().all()
     assert left == ["old-failed", "old-queued", "recent-sent"]  # unsent rows still need the sweeper or a human
+
+
+# ---------------------------------------------------------------- internal endpoints (design v2.0)
+
+
+def test_record_then_send_once(make_client, service_tokens):
+    smtp = FakeSmtp()
+    client = make_client(smtp)
+    email = {"notification_key": "email-application-j-c-STAGE_CHANGED", "recipient": "jane@example.com",
+             "template_code": "STAGE_CHANGED", "variables": {"job_title": "SRE", "to_stage": "Interview"}}
+    assert client.post("/internal/emails", json=email).status_code == 401  # orchestrator only
+    first = client.post("/internal/emails", json=email, headers=service_tokens.headers())
+    again = client.post("/internal/emails", json=email, headers=service_tokens.headers())  # a retried step
+    assert first.status_code == 200 and first.json() == again.json() and first.json()["status"] == "QUEUED"
+    key = email["notification_key"]
+    assert client.post(f"/internal/emails/{key}/send", headers=service_tokens.headers()).json() == {"status": "SENT"}
+    assert client.post(f"/internal/emails/{key}/send", headers=service_tokens.headers()).json() == {"status": "SENT"}
+    assert len(smtp.sent) == 1  # sent once, however often the step runs
+
+
+def test_smtp_down_is_503_so_the_workflow_retries_then_failed(make_client, service_tokens):
+    client = make_client(FakeSmtp(failures=100))  # SMTP stays down
+    key = "email-x-JOB_READY"
+    client.post("/internal/emails", json={"notification_key": key, "recipient": "r@example.com",
+                                          "template_code": "JOB_READY", "variables": {"job_title": "SRE"}},
+                headers=service_tokens.headers())
+    for _ in range(3):  # never FAILED here, however many attempts: the workflow decides when to give up
+        down = client.post(f"/internal/emails/{key}/send", headers=service_tokens.headers())
+        assert down.status_code == 503 and down.json()["error"]["code"] in ("SMTP_UNAVAILABLE",)
+    failed = client.post(f"/internal/emails/{key}/failed", headers=service_tokens.headers())
+    assert failed.json() == {"status": "FAILED"}
+    assert client.post("/internal/emails/nope/send", headers=service_tokens.headers()).status_code == 404
+
+
+def test_send_after_smtp_recovers(make_client, service_tokens):
+    smtp = FakeSmtp(failures=1)
+    client = make_client(smtp)
+    key = "email-y-JOB_READY"
+    client.post("/internal/emails", json={"notification_key": key, "recipient": "r@example.com",
+                                          "template_code": "JOB_READY", "variables": {"job_title": "SRE"}},
+                headers=service_tokens.headers())
+    assert client.post(f"/internal/emails/{key}/send", headers=service_tokens.headers()).status_code == 503
+    assert client.post(f"/internal/emails/{key}/send", headers=service_tokens.headers()).json() == {"status": "SENT"}
+    assert len(smtp.sent) == 1

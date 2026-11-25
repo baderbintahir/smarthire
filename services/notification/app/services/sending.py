@@ -45,8 +45,10 @@ def smtp_mailer(host: str, port: int, sender: str) -> Callable[[str, str, str], 
     return send
 
 
-async def send(notification_id: uuid.UUID, mailer: Callable[[str, str, str], None]) -> str:
-    """Returns what happened: sent, skipped (already done), busy (another task has it), missing, failed."""
+async def send(notification_id: uuid.UUID, mailer: Callable[[str, str, str], None], *, give_up: bool = True) -> str:
+    """Returns what happened: sent, skipped (already done), busy (another task has it), missing, failed.
+    give_up=True: FAILED after MAX_ATTEMPTS (the Celery path). False: never here, the caller decides when to
+    give up (SendEmailWorkflow, design v2.0, whose retry policy owns the limit)."""
     async with session_scope() as session:
         locked = await repo.lock_for_sending(session, notification_id)
         if locked is None:
@@ -61,7 +63,7 @@ async def send(notification_id: uuid.UUID, mailer: Callable[[str, str, str], Non
         except pybreaker.CircuitBreakerError as exc:
             raise SendLater("circuit open: SMTP recently failing, not trying for now") from exc
         except (smtplib.SMTPException, OSError) as exc:
-            final = log.attempts + 1 >= MAX_ATTEMPTS
+            final = give_up and log.attempts + 1 >= MAX_ATTEMPTS
             await repo.record_failure(session, notification_id, f"{type(exc).__name__}: {exc}", final=final)
             await session.commit()  # keep the failure record (raising below would roll it back)
             if final:

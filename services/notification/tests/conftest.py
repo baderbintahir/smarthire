@@ -35,3 +35,30 @@ async def database(migrated, database_url):
     db.init_db(database_url)  # no app runs in these tests
     yield
     await db.close_db()
+
+
+@pytest.fixture(scope="session")
+def service_tokens():
+    return testing.ServiceTokenFactory()  # the orchestrator's tokens for /internal/*
+
+
+@pytest.fixture
+def make_client(migrated, database_url, service_tokens):
+    """A TestClient with a fake mailer: make_client(mailer) -> client."""
+    from contextlib import ExitStack
+
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+
+    testing.run(testing.truncate(database_url, TABLES))
+    stack = ExitStack()
+
+    def make(mailer):
+        settings = Settings(database_url=database_url, kafka_enabled=False, _env_file=None)
+        return stack.enter_context(TestClient(create_app(settings, service_key_provider=service_tokens.key_provider,
+                                                         mailer=mailer)))
+
+    yield make
+    stack.close()

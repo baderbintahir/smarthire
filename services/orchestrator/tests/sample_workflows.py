@@ -19,3 +19,15 @@ class ThingWorkflow(CommitFirst):
     async def commit(self, params: dict) -> dict:
         return await self.run_commit(
             lambda: call("make_thing", "things", "POST", "/internal/things", params, retry=COMMIT_RETRY))
+
+
+@workflow.defn
+class NotifyingWorkflow:
+    """A parent that starts an email and finishes at once (the email must still be sent)."""
+
+    @workflow.run
+    async def run(self, params: dict) -> str:
+        from app.workflows.email import send_email
+
+        await send_email("JOB_READY", params["user_id"], {"job_title": "SRE"})
+        return "PARENT_DONE"

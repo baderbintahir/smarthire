@@ -50,3 +50,14 @@ async def stale_queued(session: AsyncSession, older_than: datetime, limit: int =
     stmt = (select(NotificationLog.id).where(NotificationLog.status == "QUEUED", NotificationLog.created_at < older_than)
             .order_by(NotificationLog.created_at).limit(limit))
     return list((await session.execute(stmt)).scalars())
+
+
+async def find_by_key(session: AsyncSession, key: str) -> NotificationLog | None:
+    return (await session.execute(select(NotificationLog).where(NotificationLog.notification_key == key))).scalar_one_or_none()
+
+
+async def mark_failed_if_queued(session: AsyncSession, notification_id: uuid.UUID) -> None:
+    """Retries ran out (SendEmailWorkflow decided): QUEUED -> FAILED. A SENT email stays SENT."""
+    await session.execute(update(NotificationLog)
+                          .where(NotificationLog.id == notification_id, NotificationLog.status == "QUEUED")
+                          .values(status="FAILED"))
