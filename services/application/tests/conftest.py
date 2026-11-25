@@ -91,8 +91,24 @@ def service_tokens():
     return testing.ServiceTokenFactory()  # the orchestrator's tokens for /internal/*
 
 
+# The commit step of each action, exactly as the orchestrator's workflows call it (design v2.1)
+COMMITS = {
+    "apply": lambda i: ("POST", "/internal/applications", i["application"]),
+    "change-stage": lambda i: ("POST", f"/internal/applications/{i['application_id']}/stage",
+                               {k: i[k] for k in ("to_stage", "version", "reason", "actor_id")}),
+    "decide": lambda i: ("POST", f"/internal/applications/{i['application_id']}/decision",
+                         {k: i[k] for k in ("decision", "version", "reason", "actor_id")}),
+    "withdraw": lambda i: ("POST", f"/internal/applications/{i['application_id']}/withdraw", None),
+}
+
+
 @pytest.fixture
-def client(migrated, database_url, redis_url, tokens, candidates, service_tokens):
+def orchestrator(service_tokens):
+    return testing.FakeOrchestrator(service_tokens, COMMITS)
+
+
+@pytest.fixture
+def client(migrated, database_url, redis_url, tokens, candidates, service_tokens, orchestrator):
     from fastapi.testclient import TestClient
 
     from app.config import Settings
@@ -102,6 +118,8 @@ def client(migrated, database_url, redis_url, tokens, candidates, service_tokens
     testing.run(testing.flush_redis(redis_url))
     settings = Settings(database_url=database_url, redis_url=redis_url, max_active_applications=MAX_ACTIVE,
                         kafka_enabled=False, temporal_enabled=False, _env_file=None)
-    with TestClient(create_app(settings, key_provider=tokens.key_provider, candidate_client=candidates,
-                               service_key_provider=service_tokens.key_provider)) as c:
+    app = create_app(settings, key_provider=tokens.key_provider, candidate_client=candidates,
+                     service_key_provider=service_tokens.key_provider, orchestrator=orchestrator)
+    orchestrator.bind(app)
+    with TestClient(app) as c:
         yield c

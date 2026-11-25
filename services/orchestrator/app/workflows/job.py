@@ -13,6 +13,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
+from app.workflows.application import application_workflow_id
 from app.workflows.base import COMMIT_RETRY, CommitFirst, business_error, call, record_fact
 from app.workflows.email import send_email
 
@@ -99,7 +100,8 @@ class JobClosingWorkflow(CommitFirst):
                             f"/internal/job-replicas/{job['job_id']}/close", {"version": job["version"]})
         for application in closed["closed"]:
             try:  # stop scoring for an application that can't go on (best effort: it may have finished)
-                await workflow.get_external_workflow_handle(f"app-{application['application_id']}").signal("job_closed")
+                await workflow.get_external_workflow_handle(
+                    application_workflow_id(job["job_id"], application["candidate_id"])).signal("job_closed")
             except Exception:
                 workflow.logger.info("no running workflow for application %s", application["application_id"])
         return "DONE"

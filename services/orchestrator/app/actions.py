@@ -26,4 +26,9 @@ ACTIONS: dict[str, Action] = {
     "publish-job": Action("JobPublishingWorkflow", lambda k: f"publish-{k['job_id']}-v{k['version']}"),
     "edit-ready-job": Action("JobPublishingWorkflow", lambda k: f"publish-{k['job_id']}-v{k['version']}"),
     "close-job": Action("JobClosingWorkflow", lambda k: f"close-{k['job_id']}"),
+    # Application (W10-W13). One application per candidate and job: a second apply attaches to the first
+    "apply": Action("ApplicationWorkflow", lambda k: f"application-{k['job_id']}-{k['candidate_id']}"),
+    "change-stage": Action("ApplicationActionWorkflow", lambda k: f"stage-{k['application_id']}-v{k['version']}"),
+    "decide": Action("ApplicationActionWorkflow", lambda k: f"decision-{k['application_id']}"),
+    "withdraw": Action("ApplicationActionWorkflow", lambda k: f"withdraw-{k['application_id']}"),
 }

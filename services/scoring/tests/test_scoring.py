@@ -1,17 +1,16 @@
-"""Step 10.3: the score formula (pure), then the activity on a real MongoDB replica set with the
-Candidate and Enrichment APIs replaced by httpx.MockTransport."""
+"""Step 10.3: the score formula (pure), then the score_application step (design v2.1: an internal
+endpoint the orchestrator calls) on a real MongoDB with the Candidate and Enrichment APIs replaced by
+httpx.MockTransport."""
 
 import httpx
 import pytest
 from pymongo import AsyncMongoClient
 from smarthire_common import mongo
-from smarthire_common.mongo_outbox import MongoOutboxRelay, ensure_outbox_indexes
-from temporalio.exceptions import ApplicationError
-from temporalio.testing import ActivityEnvironment
+from smarthire_common.errors import AppError, ServiceUnavailableError
 
 from app.domain.scoring import score
 from app.repositories import peers, scores
-from app.workflows.activities import CANNOT_SCORE, score_application
+from app.services import scoring
 
 # ---------------------------------------------------------------- the formula
 
@@ -74,7 +73,6 @@ async def stores(settings):
     await client.close()
     mongo.init_mongo(settings.mongo_url, settings.mongo_database)
     await scores.ensure_indexes()
-    await ensure_outbox_indexes()
     yield
     await peers.close_peers()
     await mongo.close_mongo()
@@ -82,66 +80,54 @@ async def stores(settings):
 
 async def run(**peer_options):
     peers.init_peers("http://candidate", "http://enrichment", transport=fake_peers(**peer_options))
-    return await ActivityEnvironment().run(score_application, APP, CANDIDATE, JOB, 2.0)
+    return await scoring.score_application(APP, CANDIDATE, JOB, 2.0)
 
 
-async def outbox_docs():
-    return await mongo.get_db()["outbox"].find().to_list()
-
-
-async def test_scores_saves_and_queues_candidate_scored_together(stores):
+async def test_scores_and_saves(stores):
     result = await run()
     assert result["score"] == 70 + 0 + 20  # both must-haves (k8s = kubernetes), no sql, 4 >= 2 years
     doc = await scores.get(APP)
     assert doc["job_id"] == JOB and doc["score"] == 90.0 and doc["semantic_score"] is None
-    [event] = await outbox_docs()
-    assert event["event_type"] == "CandidateScored" and event["message_key"] == APP and event["published_at"] is None
 
 
-async def test_running_twice_keeps_one_score_and_one_event(stores):
+async def test_running_twice_keeps_one_score(stores):
     await run()
-    await run()  # Temporal re-ran it after a lost result
+    await run()  # the orchestrator re-ran the step after a lost answer
     assert await mongo.get_db()["scores"].count_documents({}) == 1
-    assert len(await outbox_docs()) == 1
 
 
-async def test_unparsed_resume_is_retryable(stores):
-    with pytest.raises(ApplicationError) as err:
+async def test_unparsed_resume_is_503_so_the_step_retries(stores):
+    with pytest.raises(ServiceUnavailableError) as err:
         await run(resume_status="UPLOADED")
-    assert not err.value.non_retryable  # Temporal tries again: parsing will catch up
+    assert err.value.code == "RESUME_NOT_PARSED"  # 5xx: parsing will catch up
 
 
 @pytest.mark.parametrize("options", [{"resume_status": None}, {"resume_status": "FAILED"}, {"job_found": False}])
-async def test_impossible_cases_are_not_retried(stores, options):
-    with pytest.raises(ApplicationError) as err:
+async def test_impossible_cases_are_422_and_not_retried(stores, options):
+    with pytest.raises(AppError) as err:
         await run(**options)
-    assert err.value.non_retryable and err.value.type == CANNOT_SCORE
-    assert await scores.get(APP) is None and await outbox_docs() == []
+    assert (err.value.http_status, err.value.code) == (422, "CANNOT_SCORE")
+    assert await scores.get(APP) is None
 
 
-async def test_peer_outage_raises_for_a_retry(stores):
-    with pytest.raises(httpx.HTTPStatusError):  # a plain error: Temporal retries it
+async def test_peer_outage_is_503(stores):
+    with pytest.raises(ServiceUnavailableError):
         await run(candidate_down=True)
 
 
-async def test_mongo_outbox_relay_marks_what_kafka_confirmed(stores):
-    await run()
-    sent = []
-
-    def fake_kafka(rows):
-        sent.extend(r.event_type for r in rows)
-        return [r.id for r in rows]
-
-    assert await MongoOutboxRelay(fake_kafka).publish_batch() == (1, 1)
-    assert sent == ["CandidateScored"] and (await outbox_docs())[0]["published_at"] is not None
-    assert await MongoOutboxRelay(fake_kafka).publish_batch() == (0, 0)
-
-
-def test_read_api(settings):
+def test_read_api_and_internal_endpoint(settings):
     from fastapi.testclient import TestClient
+    from smarthire_common.testing import ServiceTokenFactory
 
     from app.main import create_app
 
-    with TestClient(create_app(settings)) as client:
+    service_tokens = ServiceTokenFactory()
+    with TestClient(create_app(settings, peer_transport=fake_peers(),
+                               service_key_provider=service_tokens.key_provider)) as client:
         assert client.get("/scores/unknown").status_code == 404
         assert client.get("/health/ready").json()["checks"] == {"mongo": "ok"}
+        body = {"application_id": APP, "candidate_id": CANDIDATE, "job_id": JOB, "min_experience_years": 2.0}
+        assert client.post("/internal/scores", json=body, headers={"Idempotency-Key": "k"}).status_code == 401
+        r = client.post("/internal/scores", json=body, headers=service_tokens.headers())
+        assert r.status_code == 200 and r.json()["score"] == 90.0
+        assert client.get(f"/scores/{APP}").json()["score"] == 90.0

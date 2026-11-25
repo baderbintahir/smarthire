@@ -19,7 +19,7 @@ async def ensure_indexes() -> None:
     await _collection().create_indexes([IndexModel([("job_id", 1), ("score", DESCENDING)], name="ix_job_score")])
 
 
-async def save(application_id: str, doc: dict, *, session: AsyncClientSession) -> bool:
+async def save(application_id: str, doc: dict, *, session: AsyncClientSession | None = None) -> bool:
     """Insert or replace. True when this application had no score before (its first scoring)."""
     result = await _collection().replace_one(
         {"_id": application_id}, {**doc, "scored_at": datetime.now(UTC)}, upsert=True, session=session

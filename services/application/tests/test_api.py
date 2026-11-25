@@ -61,7 +61,8 @@ def apply(client, headers, job_id, key=None):
 # ---------------------------------------------------------------- 8.3 submit
 
 
-def test_apply_creates_application_history_quota_and_event(client, candidate, recruiter, add_job, database_url):
+def test_apply_creates_application_history_and_quota_through_the_workflow(client, candidate, recruiter, add_job,
+                                                                          database_url, orchestrator):
     user_id, headers = candidate
     job_id = add_job(recruiter[0])
     r = apply(client, headers, job_id)
@@ -73,10 +74,10 @@ def test_apply_creates_application_history_quota_and_event(client, candidate, re
     [history] = db(database_url, "SELECT from_stage, to_stage FROM application_stage_history")
     assert (history["from_stage"], history["to_stage"]) == (None, "SUBMITTED")
     assert db(database_url, "SELECT active_count FROM application_quotas")[0]["active_count"] == 1
-    [event] = db(database_url, "SELECT message_key, payload FROM outbox")
-    assert event["message_key"] == body["id"] and event["payload"]["event_type"] == "ApplicationSubmitted"
-    assert event["payload"]["payload"] == {"application_id": body["id"], "job_id": job_id, "candidate_id": str(user_id),
-                                           "recruiter_id": str(recruiter[0]), "job_title": "Backend Engineer"}
+    # Design v2.1: the orchestrator's ApplicationWorkflow made it (its commit step is our POST /internal/applications)
+    [(action, key, payload)] = orchestrator.actions
+    assert action == "apply" and key == {"job_id": job_id, "candidate_id": str(user_id)}
+    assert payload["application"]["id"] == body["id"] and payload["application"]["candidate_name"] == "Jane Doe"
 
 
 def test_same_idempotency_key_returns_the_same_response(client, candidate, add_job, candidates, database_url):
@@ -245,7 +246,8 @@ def test_detail_visibility(client, candidate, recruiter, tokens, add_job):
 # ---------------------------------------------------------------- 8.5 changes
 
 
-def test_stage_change_writes_history_audit_and_event(client, candidate, recruiter, add_job, database_url):
+def test_stage_change_writes_history_and_audit_through_the_workflow(client, candidate, recruiter, add_job, database_url,
+                                                                    orchestrator):
     app = apply(client, candidate[1], add_job(recruiter[0])).json()
     r = client.patch(f"/applications/{app['id']}/stage", json={"to_stage": "Interview", "version": 1, "reason": "good CV"},
                      headers=recruiter[1])
@@ -253,9 +255,8 @@ def test_stage_change_writes_history_audit_and_event(client, candidate, recruite
     assert (r.json()["status"], r.json()["current_stage"], r.json()["version"]) == ("IN_PROGRESS", "Interview", 2)
     [audit] = db(database_url, "SELECT action, before, after FROM audit_entries")
     assert (audit["action"], audit["before"], audit["after"]) == ("STAGE_CHANGED", {"stage": "SUBMITTED"}, {"stage": "Interview"})
-    event = db(database_url, "SELECT payload FROM outbox ORDER BY id DESC LIMIT 1")[0]["payload"]
-    assert event["event_type"] == "ApplicationStageChanged"
-    assert (event["payload"]["from_stage"], event["payload"]["to_stage"]) == ("SUBMITTED", "Interview")
+    action, key, _ = orchestrator.actions[-1]
+    assert action == "change-stage" and key == {"application_id": app["id"], "version": 1}
 
 
 def test_stage_change_rules(client, candidate, recruiter, tokens, add_job):
@@ -270,13 +271,12 @@ def test_stage_change_rules(client, candidate, recruiter, tokens, add_job):
     assert stale.status_code == 409 and stale.json()["error"]["code"] == "VERSION_CONFLICT"
 
 
-def test_decision_is_final_frees_quota_and_publishes(client, candidate, recruiter, add_job, database_url):
+def test_decision_is_final_and_frees_quota(client, candidate, recruiter, add_job, database_url, orchestrator):
     app = apply(client, candidate[1], add_job(recruiter[0])).json()
     r = client.post(f"/applications/{app['id']}/decision", json={"decision": "HIRED", "version": 1}, headers=recruiter[1])
     assert r.status_code == 200 and r.json()["status"] == "HIRED"
     assert db(database_url, "SELECT active_count FROM application_quotas")[0]["active_count"] == 0
-    event = db(database_url, "SELECT payload FROM outbox ORDER BY id DESC LIMIT 1")[0]["payload"]
-    assert event["event_type"] == "ApplicationDecisionMade" and event["payload"]["decision"] == "HIRED"
+    assert orchestrator.actions[-1][0] == "decide" and orchestrator.inputs("decide")[0]["decision"] == "HIRED"
     again = client.post(f"/applications/{app['id']}/decision", json={"decision": "REJECTED", "version": 2},
                         headers=recruiter[1])
     assert again.status_code == 409 and again.json()["error"]["code"] == "APPLICATION_NOT_ACTIVE"
@@ -321,3 +321,24 @@ def test_stage_summary_for_the_job_owner(client, recruiter, tokens, add_job):
     summary = client.get(f"/jobs/{job_id}/applications/summary", headers=recruiter[1]).json()
     assert summary == {"job_id": job_id, "total": 3, "by_stage": {"Interview": 1, "SUBMITTED": 2}}
     assert client.get(f"/jobs/{job_id}/applications/summary", headers=tokens.headers(role="RECRUITER")).status_code == 404
+
+
+def test_orchestrator_down_means_503_and_no_application(client, candidate, recruiter, add_job, orchestrator, database_url):
+    orchestrator.down = True
+    r = apply(client, candidate[1], add_job(recruiter[0]))
+    assert r.status_code == 503 and r.json()["error"]["code"] == "WORKFLOWS_UNAVAILABLE"
+    assert db(database_url, "SELECT count(*) AS n FROM applications")[0]["n"] == 0
+
+
+def test_steps_are_safe_to_repeat(client, candidate, recruiter, add_job, service_tokens):
+    """Temporal may run a commit step again after a timeout: the same answer, no second change."""
+    app = apply(client, candidate[1], add_job(recruiter[0])).json()
+    stage = {"to_stage": "Interview", "version": 1, "reason": None, "actor_id": str(recruiter[0])}
+    url = f"/internal/applications/{app['id']}"
+    first = client.post(f"{url}/stage", json=stage, headers=service_tokens.headers())
+    again = client.post(f"{url}/stage", json=stage, headers=service_tokens.headers())
+    assert first.status_code == again.status_code == 200 and first.json() == again.json()
+    assert first.json()["application"]["version"] == 2
+    for _ in range(2):
+        assert client.post(f"{url}/withdraw", headers=service_tokens.headers()).json()["application"]["status"] == "WITHDRAWN"
+    assert client.post(f"{url}/withdraw", headers={"Idempotency-Key": "k"}).status_code == 401

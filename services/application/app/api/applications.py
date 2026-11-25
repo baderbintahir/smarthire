@@ -45,12 +45,11 @@ async def apply(
     # 202 Accepted: the application exists, but scoring and screening happen afterwards (Phase 10)
     settings = request.app.state.settings
     result = await service.apply(
-        session, user, body.job_id,
+        session, request.app.state.orchestrator, user, body.job_id,
         idempotency_key=idempotency_key,
         idempotency=IdempotencyStore(get_redis(), ttl_seconds=settings.idempotency_ttl_seconds),
         authorization=request.headers["authorization"],  # forwarded to Candidate: it checks the same user
         candidates=request.app.state.candidates,
-        max_active=settings.max_active_applications,
     )
     return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=result)
 
@@ -100,20 +99,22 @@ async def application_detail(
 
 @router.patch("/applications/{application_id}/stage", response_model=ApplicationOut)
 async def change_stage(
-    application_id: uuid.UUID, body: StageChangeIn, user: CurrentUser = Depends(recruiter_only),
+    application_id: uuid.UUID, body: StageChangeIn, request: Request, user: CurrentUser = Depends(recruiter_only),
     session: AsyncSession = Depends(get_session),
 ):
     return application_out(*await service.change_stage(
-        session, user, application_id, to_stage=body.to_stage, version=body.version, reason=body.reason))
+        session, request.app.state.orchestrator, user, application_id, to_stage=body.to_stage, version=body.version,
+        reason=body.reason))
 
 
 @router.post("/applications/{application_id}/decision", response_model=ApplicationOut)
 async def decide(
-    application_id: uuid.UUID, body: DecisionIn, user: CurrentUser = Depends(recruiter_only),
+    application_id: uuid.UUID, body: DecisionIn, request: Request, user: CurrentUser = Depends(recruiter_only),
     session: AsyncSession = Depends(get_session),
 ):
     return application_out(*await service.decide(
-        session, user, application_id, decision=body.decision, version=body.version, reason=body.reason))
+        session, request.app.state.orchestrator, user, application_id, decision=body.decision, version=body.version,
+        reason=body.reason))
 
 
 @router.post("/applications/{application_id}/notes", status_code=status.HTTP_201_CREATED, response_model=NoteOut)
@@ -129,6 +130,4 @@ async def withdraw(
     application_id: uuid.UUID, request: Request, user: CurrentUser = Depends(candidate_only),
     session: AsyncSession = Depends(get_session),
 ):
-    settings = request.app.state.settings
-    return application_out(*await service.withdraw(
-        session, user, application_id, settings=settings if settings.temporal_enabled else None))
+    return application_out(*await service.withdraw(session, request.app.state.orchestrator, user, application_id))

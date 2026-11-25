@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories import applications as applications_repo
 from app.repositories import job_replica
-from app.workflows.activities import SYSTEM_ACTOR
+from app.services.steps import SYSTEM_ACTOR
 
 log = logging.getLogger(__name__)
 

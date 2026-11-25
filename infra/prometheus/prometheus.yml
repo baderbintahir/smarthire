@@ -29,12 +29,9 @@ scrape_configs:
         target_label: service
 
   - job_name: temporal-workers             # the Temporal SDK's own metrics (chassis temporal.py, :9464)
-    # Design v2.1: the orchestrator runs every workflow; application and scoring keep their workers until
-    # Step T9 moves them, then only the orchestrator is left here
+    # Design v2.1: the orchestrator runs every workflow, so it is the only Temporal worker (2 replicas)
     dns_sd_configs:
       - { names: [orchestrator], type: A, port: 9464 }
-      - { names: [application], type: A, port: 9464 }
-      - { names: [scoring], type: A, port: 9464 }
     relabel_configs: *service_label
 
   - job_name: rabbitmq                     # Celery queue depth: messages waiting per queue

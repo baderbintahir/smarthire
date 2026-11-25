@@ -6,24 +6,20 @@ from smarthire_common.background import stop_tasks
 from smarthire_common.db import close_db, init_db
 from smarthire_common.errors import register_exception_handlers
 from smarthire_common.health import db_ping_check, health_router, register_readiness_check
-from smarthire_common.kafka import start_consumer
 from smarthire_common.logging import setup_logging
 from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
+from smarthire_common.orchestrator_client import OrchestratorClient
 from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
 from smarthire_common.retention import start_retention
 from smarthire_common.service_auth import close_service_auth, init_service_auth
 from smarthire_common.telemetry import flush_tracing, setup_tracing
-from smarthire_common.temporal import start_worker
 
 from app import maintenance
 from app.api import applications, internal
 from app.config import Settings
-from app.events import handlers
 from app.repositories.candidate_api import CandidateClient, HttpCandidateClient
-from app.workflows import activities
-from app.workflows.processing import APPLICATION_TQ, ApplicationWorkflow
 
 
 def create_app(
@@ -32,9 +28,10 @@ def create_app(
     key_provider: KeyProvider | None = None,
     candidate_client: CandidateClient | None = None,
     service_key_provider: KeyProvider | None = None,
+    orchestrator=None,
 ) -> FastAPI:
     """key_provider, service_key_provider and candidate_client let tests replace Identity's JWKS, the
-    orchestrator's JWKS and the Candidate API."""
+    orchestrator's JWKS and the Candidate API; tests pass a fake orchestrator too."""
     settings = settings or Settings()
     setup_logging(settings.service_name, settings.log_level)
 
@@ -50,25 +47,20 @@ def create_app(
         app.state.candidates = candidate_client or HttpCandidateClient(settings.candidate_url)
         # The orchestrator's workflow steps call /internal/* with its service token (design v2.1)
         init_service_auth(service_key_provider or JWKSClient(settings.orchestrator_jwks_url))
+        app.state.orchestrator = orchestrator or OrchestratorClient(settings.orchestrator_url)
         register_readiness_check("database", db_ping_check)
         register_readiness_check("redis", redis_ping_check)
-        # Publish our events (ApplicationSubmitted starts the workflow, until Step T9). Kafka (and Candidate) are not
-        # readiness checks: everything except applying keeps working without them
-        tasks = []
-        if settings.kafka_enabled:
-            tasks = [
-                start_outbox_relay(settings),
-                start_consumer(settings, name=handlers.CONSUMER_NAME, topics=handlers.TOPICS,
-                               handlers=handlers.build_handlers(settings)),
-            ]
-        if settings.temporal_enabled:  # runs ApplicationWorkflow and our own activities (application-tq)
-            tasks.append(start_worker(settings, task_queue=APPLICATION_TQ, workflows=[ApplicationWorkflow],
-                                      activities=activities.ACTIVITIES))
+        # Design v2.1: no consumer and no Temporal worker here any more: the orchestrator runs the
+        # application workflows and calls /internal/* for each step. The outbox relay stays until Step T10
+        # removes Kafka (nothing writes to the outbox now)
+        tasks = [start_outbox_relay(settings)] if settings.kafka_enabled else []
         tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
         await app.state.candidates.close()
         await close_service_auth()
+        if orchestrator is None:
+            await app.state.orchestrator.aclose()
         await close_auth()
         await close_redis()
         await close_db()
