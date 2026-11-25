@@ -8,10 +8,24 @@ whether the job was already counted."""
 
 import uuid
 from datetime import date, datetime
+from enum import StrEnum
 
 from sqlalchemy import BigInteger, CheckConstraint, Date, DateTime, Index, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
-from smarthire_common.models import Base
+from smarthire_common.models import Base, pg_enum
+
+
+class UserRole(StrEnum):
+    """Native PostgreSQL ENUMs (design v2.2): user_role (Identity's roles), ai_usage_kind."""
+
+    CANDIDATE = "CANDIDATE"
+    RECRUITER = "RECRUITER"
+    ADMIN = "ADMIN"
+
+
+class AiUsageKind(StrEnum):
+    QUERY = "QUERY"
+    SUMMARY = "SUMMARY"
 
 
 class MetricCounter(Base):
@@ -69,8 +83,8 @@ class AiUsageDaily(Base):
     __tablename__ = "ai_usage_daily"
 
     day: Mapped[date] = mapped_column(Date, primary_key=True)
-    role: Mapped[str] = mapped_column(Text, primary_key=True)  # RECRUITER, CANDIDATE
-    kind: Mapped[str] = mapped_column(Text, primary_key=True)  # QUERY, SUMMARY
+    role: Mapped[UserRole] = mapped_column(pg_enum(UserRole, "user_role"), primary_key=True)
+    kind: Mapped[AiUsageKind] = mapped_column(pg_enum(AiUsageKind, "ai_usage_kind"), primary_key=True)
     count: Mapped[int] = mapped_column(server_default=text("0"))
 
 

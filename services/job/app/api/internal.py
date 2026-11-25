@@ -43,12 +43,12 @@ async def start_processing(job_id: uuid.UUID, body: StartProcessing, session: As
 
 @router.post("/{job_id}/ready")
 async def mark_ready(job_id: uuid.UUID, body: AtVersion, session: AsyncSession = Depends(get_session)):
-    return await publishing.finish(session, job_id, body.version, "READY")
+    return await publishing.finish_publishing(session, job_id, body.version, "READY")
 
 
 @router.post("/{job_id}/failed")
 async def mark_failed(job_id: uuid.UUID, body: AtVersion, session: AsyncSession = Depends(get_session)):
-    return await publishing.finish(session, job_id, body.version, "FAILED")
+    return await publishing.finish_publishing(session, job_id, body.version, "FAILED")
 
 
 @router.post("/{job_id}/close")

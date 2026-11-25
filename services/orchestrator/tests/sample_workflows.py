@@ -10,7 +10,7 @@ from app.workflows.base import COMMIT_RETRY, CommitFirst, call
 class ThingWorkflow(CommitFirst):
     @workflow.run
     async def run(self, params: dict) -> str:
-        if not await self.wait_for_commit():
+        if not await self.is_commit_accepted():
             return "REJECTED"
         await call("after_thing", "things", "POST", "/internal/after", {"id": params["id"]})
         return "DONE"

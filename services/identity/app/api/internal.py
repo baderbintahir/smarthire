@@ -60,7 +60,7 @@ class NewUser(BaseModel):
 @router.post("/users", response_model=UserOut, dependencies=COMMIT_STEP)
 async def create_user(body: NewUser, session: AsyncSession = Depends(get_session)):
     user, roles = await registration.create_user(session, **body.model_dump())
-    return to_user_out(user, sorted(roles, key=users_repo.ROLE_IDS.get))
+    return to_user_out(user, users_repo.in_role_order(roles))
 
 
 class RoleGrant(BaseModel):

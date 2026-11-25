@@ -14,9 +14,9 @@ def test_hash_is_salted_and_verifies():
     h1, h2 = passwords.hash_password("s3cret-pass"), passwords.hash_password("s3cret-pass")
     assert h1 != h2  # different random salt each time
     assert h1.startswith("$argon2id$")
-    assert passwords.verify_password(h1, "s3cret-pass")
-    assert not passwords.verify_password(h1, "wrong-pass")
-    assert not passwords.verify_password("not-a-hash", "s3cret-pass")  # garbage never raises
+    assert passwords.is_password_correct(h1, "s3cret-pass")
+    assert not passwords.is_password_correct(h1, "wrong-pass")
+    assert not passwords.is_password_correct("not-a-hash", "s3cret-pass")  # garbage never raises
 
 
 @pytest.fixture(scope="module")

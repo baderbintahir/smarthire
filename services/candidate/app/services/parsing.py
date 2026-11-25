@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from smarthire_common.db import session_scope
 
 from app.domain.resume_parser import ResumeUnreadableError, extract_text, parse
+from app.models import ResumeStatus
 from app.repositories import candidates as repo
 from app.repositories import files
 
@@ -24,7 +25,7 @@ async def parse_resume(resume_id: uuid.UUID) -> str:
         resume = await repo.get_resume(session, resume_id)
         if resume is None:
             return "missing"
-        if resume.status != "UPLOADED":
+        if resume.status != ResumeStatus.UPLOADED:
             return "skipped"  # parsed/failed already: a repeated step
         key, content_type, candidate_id = resume.object_key, resume.content_type, resume.candidate_id
 
@@ -41,7 +42,7 @@ async def parse_resume(resume_id: uuid.UUID) -> str:
         return "failed"
 
     async with session_scope() as session:
-        if not await repo.mark_resume_parsed(session, resume_id, parsed):
+        if not await repo.is_resume_marked_parsed(session, resume_id, parsed):
             return "skipped"  # another run finished first
     log.info("resume %s of candidate %s parsed", resume_id, candidate_id)
     return "parsed"

@@ -1,8 +1,10 @@
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, field_validator
+
+from app.domain.job import EmploymentType
 
 Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=200)]
 Skill = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)]
@@ -21,7 +23,7 @@ class JobIn(BaseModel):
     title: Title
     description: str = Field(min_length=1, max_length=20_000)
     location: str | None = Field(default=None, max_length=200)
-    employment_type: Literal["FULL_TIME", "PART_TIME", "CONTRACT", "INTERNSHIP"]
+    employment_type: EmploymentType
     required_skills: list[Skill] = Field(default_factory=list, max_length=50)
     eligibility_rules: EligibilityRules = Field(default_factory=EligibilityRules)
     application_limit: int | None = Field(default=None, ge=1)

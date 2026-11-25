@@ -3,13 +3,21 @@ event can't queue the same email twice, however often it is delivered."""
 
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
-from smarthire_common.models import Base, new_id
+from smarthire_common.models import Base, new_id, pg_enum
 
-STATUSES = ("QUEUED", "SENT", "FAILED")
+
+
+class EmailStatus(StrEnum):
+    """A native PostgreSQL ENUM, email_status (design v2.2)."""
+
+    QUEUED = "QUEUED"
+    SENT = "SENT"
+    FAILED = "FAILED"
 
 
 class NotificationTemplate(Base):
@@ -24,7 +32,6 @@ class NotificationTemplate(Base):
 class NotificationLog(Base):
     __tablename__ = "notification_log"
     __table_args__ = (
-        CheckConstraint("status IN ('QUEUED', 'SENT', 'FAILED')", name="status"),
         CheckConstraint("attempts >= 0", name="attempts_non_negative"),
         # Finding emails by status and age: stuck QUEUED or FAILED ones (operators), old SENT ones (retention)
         Index("ix_notification_log_status_created", "status", "created_at"),
@@ -35,7 +42,7 @@ class NotificationLog(Base):
     recipient: Mapped[str] = mapped_column(Text)  # the email address, looked up when queued
     template_code: Mapped[str] = mapped_column(Text, ForeignKey("notification_templates.code"))
     payload: Mapped[dict] = mapped_column(JSONB)  # the template's variables
-    status: Mapped[str] = mapped_column(Text, server_default=text("'QUEUED'"))
+    status: Mapped[EmailStatus] = mapped_column(pg_enum(EmailStatus, "email_status"), server_default=text("'QUEUED'"))
     attempts: Mapped[int] = mapped_column(server_default=text("0"))
     last_error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -49,7 +49,7 @@ async def run_action(action: str, body: ActionRequest, request: Request) -> dict
     operation = WithStartWorkflowOperation(
         spec.workflow, body.input, id=workflow_id, task_queue=settings.task_queue,
         id_conflict_policy=WorkflowIDConflictPolicy.USE_EXISTING,  # same action running -> attach to it
-        # Finished -> don't run it again (see _finished below), unless it failed or may rerun by design
+        # Finished -> don't run it again (see _answer_from_finished_workflow below), unless it failed or may rerun by design
         id_reuse_policy=(WorkflowIDReusePolicy.ALLOW_DUPLICATE if spec.rerunnable
                          else WorkflowIDReusePolicy.ALLOW_DUPLICATE_FAILED_ONLY),
     )
@@ -60,7 +60,7 @@ async def run_action(action: str, body: ActionRequest, request: Request) -> dict
             rpc_timeout=timedelta(seconds=settings.commit_wait_seconds),
         )
     except WorkflowAlreadyStartedError:
-        return await _finished(client, workflow_id, spec, body.input)
+        return await _answer_from_finished_workflow(client, workflow_id, spec, body.input)
     except WorkflowUpdateFailedError as err:
         cause = err.cause
         if isinstance(cause, ApplicationError) and cause.type == BUSINESS_ERROR and cause.details:
@@ -77,7 +77,7 @@ async def run_action(action: str, body: ActionRequest, request: Request) -> dict
         with contextlib.suppress(Exception):
             await operation.workflow_handle()
         if err.status == RPCStatusCode.ALREADY_EXISTS:
-            return await _finished(client, workflow_id, spec, body.input)
+            return await _answer_from_finished_workflow(client, workflow_id, spec, body.input)
         if err.status == RPCStatusCode.UNAVAILABLE:
             raise WorkflowsUnavailableError() from None
         log.warning("action %s: Temporal answered %s", action, err.status)
@@ -86,7 +86,7 @@ async def run_action(action: str, body: ActionRequest, request: Request) -> dict
     return {"result": result}
 
 
-async def _finished(client, workflow_id: str, spec, request_input: dict) -> dict:
+async def _answer_from_finished_workflow(client, workflow_id: str, spec, request_input: dict) -> dict:
     """The action already ran to the end: answer what its commit answered then (a retry after a lost
     answer), without running its follow-ups (emails, facts) a second time."""
     outcome = await client.get_workflow_handle(workflow_id).query("commit_outcome")

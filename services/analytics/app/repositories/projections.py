@@ -72,13 +72,13 @@ async def set_job_title(session: AsyncSession, job_id: uuid.UUID, title: str) ->
     await session.execute(stmt.on_conflict_do_update(index_elements=["job_id"], set_={"title": title}))
 
 
-async def first_publish(session: AsyncSession, job_id: uuid.UUID, at: datetime) -> bool:
+async def is_first_publish(session: AsyncSession, job_id: uuid.UUID, at: datetime) -> bool:
     """True only the first time this job is published (later JobReady events, after edits, don't count)."""
     stmt = insert(PublishedJob).values(job_id=job_id, first_published_at=at).on_conflict_do_nothing().returning(PublishedJob.job_id)
     return (await session.execute(stmt)).first() is not None
 
 
-async def add_to_timeline(session: AsyncSession, application_id: uuid.UUID, job_id: uuid.UUID, candidate_id: uuid.UUID,
+async def is_added_to_timeline(session: AsyncSession, application_id: uuid.UUID, job_id: uuid.UUID, candidate_id: uuid.UUID,
                           submitted_at: datetime) -> bool:
     """True when the application is new to the read model (so counts are bumped once per application)."""
     stmt = (insert(ApplicationTimeline)

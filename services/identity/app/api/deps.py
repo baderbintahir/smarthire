@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.domain.tokens import SigningKey
+from app.models import UserStatus
 from app.repositories import users as users_repo
 from app.services.login_rate_limiter import LoginRateLimiter
 
@@ -46,7 +47,7 @@ async def get_current_user(
     # Identity-only extra checks (it owns the users table): account still active, and no
     # "logout everywhere" since the token was issued. Other services can't do this.
     db_user = await users_repo.get_by_id(session, user.user_id)
-    if db_user is None or db_user.status != "ACTIVE" or db_user.token_version != user.claims.get("tv"):
+    if db_user is None or db_user.status != UserStatus.ACTIVE or db_user.token_version != user.claims.get("tv"):
         raise UnauthorizedError("Token is no longer valid")
     return user
 

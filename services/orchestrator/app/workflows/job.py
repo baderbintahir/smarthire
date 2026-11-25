@@ -36,7 +36,7 @@ def _is_stale(err: BaseException) -> bool:
 class JobPublishingWorkflow(CommitFirst):
     @workflow.run
     async def run(self, params: dict) -> str:
-        if not await self.wait_for_commit():
+        if not await self.is_commit_accepted():
             return "REJECTED"
         job = self.committed  # the snapshot at the PROCESSING version, plus description and skills
         job_id, version = job["job_id"], job["version"]
@@ -93,7 +93,7 @@ class JobPublishingWorkflow(CommitFirst):
 class JobClosingWorkflow(CommitFirst):
     @workflow.run
     async def run(self, params: dict) -> str:
-        if not await self.wait_for_commit():
+        if not await self.is_commit_accepted():
             return "REJECTED"
         job = self.committed
         closed = await call("close_job_applications", "application", "POST",

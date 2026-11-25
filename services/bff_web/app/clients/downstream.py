@@ -26,7 +26,7 @@ class Downstream:
         self.name, self.base_url, self.http, self.timeout, self.breaker = name, base_url.rstrip("/"), http, timeout, breaker
 
     async def get(self, path: str, *, authorization: str | None = None, params: dict | None = None) -> Reply:
-        if not self.breaker.allow():
+        if not self.breaker.is_call_allowed():
             raise Unavailable(f"{self.name}: circuit open")
         headers = {"Authorization": authorization} if authorization else {}
         try:

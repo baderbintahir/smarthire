@@ -240,7 +240,7 @@ analytics, semantic_index, ai_assistant, bff_web. Gateway: Apache APISIX (config
    role and ownership.
 8. Shared code lives only in libs/smarthire_common.
 9. Database schemas must match Appendix E of docs/implementation-plan.md:
-   UUIDv7 public IDs, timestamptz, text + CHECK for statuses, explicit
+   UUIDv7 public IDs, timestamptz, native ENUM types for fixed value sets (v2.2), explicit
    constraint names, rules enforced by constraints, indexes from queries.
 10. The gateway (Apache APISIX) holds no business logic: routing, auth, revocation
    checks, rate limits, request IDs only. Data from several services is composed in
@@ -1234,7 +1234,7 @@ This is the source of truth for every schema. When a step says "create the model
    - Public IDs: **UUIDv7** generated in the app (the `uuid6` package on Python 3.12). Time-ordered, so indexes stay compact.
    - Internal append-only tables: `bigint GENERATED ALWAYS AS IDENTITY`.
    - Time: `timestamptz`, always UTC.
-   - Statuses: `text` + `CHECK (... IN (...))` instead of Postgres `ENUM`.
+   - Fixed value sets (statuses, roles, kinds): native PostgreSQL `ENUM` types (design v2.2; was `text` + `CHECK` before). Python `StrEnum` classes mirror them (SQLAlchemy `Enum` via the chassis `pg_enum`). Adding a value: `ALTER TYPE … ADD VALUE`. Exception: values longer than 63 bytes (enum label limit) stay `text` + `CHECK`, e.g. `resumes.content_type`.
    - Emails: unique index on `lower(email)`.
    - `jsonb` only for data read and written as a whole, never for columns you filter or join on.
 5. **Indexes come from queries.** For every endpoint query, index the `WHERE` columns, then the `ORDER BY` columns. No speculative indexes.
@@ -1261,41 +1261,39 @@ This is the source of truth for every schema. When a step says "create the model
 
 ## E.4 Identity (PostgreSQL, schema `identity`)
 
-Design v1.2 (Review 1 + refresh sessions in Redis). Refresh tokens are not in this schema: see E.13.
+Design v2.2 (v1.2 + roles as an enum). Refresh tokens are not in this schema: see E.13.
 
 ```sql
+CREATE TYPE user_status AS ENUM ('ACTIVE', 'SUSPENDED');
+CREATE TYPE user_role   AS ENUM ('CANDIDATE', 'RECRUITER', 'ADMIN');  -- declaration order = sort order
+
 CREATE TABLE users (
   id               uuid PRIMARY KEY,
   email            text NOT NULL,
   password_hash    text NOT NULL,
   full_name        text NOT NULL,
   current_company  text,                       -- current employer, any role
-  status           text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','SUSPENDED')),
+  status           user_status NOT NULL DEFAULT 'ACTIVE',
   token_version    int  NOT NULL DEFAULT 1,
   created_at       timestamptz NOT NULL DEFAULT now(),
   updated_at       timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX uq_users_email_lower ON users (lower(email));
 
-CREATE TABLE roles (
-  id    smallint PRIMARY KEY,
-  name  text NOT NULL UNIQUE                  -- seed: 1 CANDIDATE, 2 RECRUITER, 3 ADMIN
-);
-
 CREATE TABLE user_roles (
   user_id     uuid     NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role_id     smallint NOT NULL REFERENCES roles(id),
+  role        user_role NOT NULL,
   granted_by  uuid,                           -- null when self-granted (registration, POST /users/me/roles)
   granted_at  timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (user_id, role_id)
+  PRIMARY KEY (user_id, role)
 );
-CREATE INDEX ix_user_roles_role_id ON user_roles (role_id);
+CREATE INDEX ix_user_roles_role ON user_roles (role);
 ```
 
 | Decision | Reason |
 | --- | --- |
 | One `users` table for every role | One account store; a person is one row whatever roles they hold |
-| Roles as rows (`roles`, `user_roles`) | One account can hold several roles (a recruiter can also apply elsewhere); a new role needs no schema change |
+| Roles as rows of `user_roles`, the role an enum (v2.2) | One account can hold several roles (a recruiter can also apply elsewhere). The v1.1 `roles` lookup table was dropped: a new role is `ALTER TYPE user_role ADD VALUE` |
 | `full_name`, `current_company` on `users` | Identity is the single source of a person's name; replaces `recruiter_profiles` and `candidates.full_name` |
 | `lower(email)` unique | Case-insensitive uniqueness |
 | `token_version` | Bumped when a role is revoked, on logout-all and on suspension; a JWT claim, so Identity rejects older tokens |
@@ -1312,13 +1310,12 @@ CREATE TABLE jobs (
   title              text NOT NULL CHECK (length(title) BETWEEN 3 AND 200),
   description        text NOT NULL,
   location           text,
-  employment_type    text NOT NULL CHECK (employment_type IN ('FULL_TIME','PART_TIME','CONTRACT','INTERNSHIP')),
+  employment_type    employment_type NOT NULL,  -- ENUM ('FULL_TIME','PART_TIME','CONTRACT','INTERNSHIP')
   required_skills    jsonb NOT NULL DEFAULT '[]',
   eligibility_rules  jsonb NOT NULL DEFAULT '{}',
   application_limit  int CHECK (application_limit > 0),
   deadline           timestamptz,
-  status             text NOT NULL DEFAULT 'DRAFT'
-                     CHECK (status IN ('DRAFT','PROCESSING','READY','FAILED','CLOSED')),
+  status             job_status NOT NULL DEFAULT 'DRAFT',  -- ENUM ('DRAFT','PROCESSING','READY','FAILED','CLOSED')
   version            int  NOT NULL DEFAULT 1,
   published_at       timestamptz,
   created_at         timestamptz NOT NULL DEFAULT now(),
@@ -1367,7 +1364,7 @@ CREATE TABLE resumes (
   content_type  text NOT NULL CHECK (content_type IN
                   ('application/pdf','application/vnd.openxmlformats-officedocument.wordprocessingml.document')),
   size_bytes    int  NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 5242880),
-  status        text NOT NULL DEFAULT 'UPLOADED' CHECK (status IN ('UPLOADED','PARSED','FAILED')),
+  status        resume_status NOT NULL DEFAULT 'UPLOADED',  -- ENUM ('UPLOADED','PARSED','FAILED')
   parsed_data   jsonb,
   parse_error   text,
   is_active     boolean NOT NULL DEFAULT true,
@@ -1394,7 +1391,7 @@ CREATE TABLE job_replica (
   job_id             uuid PRIMARY KEY,
   recruiter_id       uuid NOT NULL,
   title              text NOT NULL,
-  status             text NOT NULL,
+  status             job_status NOT NULL,  -- this schema's own copy of the ENUM
   stages             jsonb NOT NULL,
   eligibility_rules  jsonb NOT NULL DEFAULT '{}',
   application_limit  int,
@@ -1408,12 +1405,11 @@ CREATE TABLE applications (
   job_id          uuid NOT NULL REFERENCES job_replica(job_id),
   candidate_id    uuid NOT NULL,
   candidate_name  text NOT NULL,
-  status          text NOT NULL DEFAULT 'SUBMITTED' CHECK (status IN
-                    ('SUBMITTED','SCREENING','IN_PROGRESS','HIRED','REJECTED','WITHDRAWN','CLOSED')),
+  status          application_status NOT NULL DEFAULT 'SUBMITTED',
+                    -- ENUM ('SUBMITTED','SCREENING','IN_PROGRESS','HIRED','REJECTED','WITHDRAWN','CLOSED')
   current_stage   text NOT NULL,
   score           numeric(5,2) CHECK (score BETWEEN 0 AND 100),
-  score_status    text NOT NULL DEFAULT 'PENDING'
-                    CHECK (score_status IN ('PENDING','SCORED','PENDING_MANUAL')),
+  score_status    score_status NOT NULL DEFAULT 'PENDING',  -- ENUM ('PENDING','SCORED','PENDING_MANUAL')
   version         int NOT NULL DEFAULT 1,
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now(),
@@ -1491,7 +1487,7 @@ CREATE TABLE notification_log (
   recipient         text NOT NULL,
   template_code     text NOT NULL REFERENCES notification_templates(code),
   payload           jsonb NOT NULL,
-  status            text NOT NULL DEFAULT 'QUEUED' CHECK (status IN ('QUEUED','SENT','FAILED')),
+  status            email_status NOT NULL DEFAULT 'QUEUED',  -- ENUM ('QUEUED','SENT','FAILED')
   attempts          int NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   last_error        text,
   created_at        timestamptz NOT NULL DEFAULT now(),
@@ -1539,8 +1535,8 @@ CREATE TABLE failures_daily (
 );
 CREATE TABLE ai_usage_daily (
   day    date NOT NULL,
-  role   text NOT NULL,                    -- RECRUITER, CANDIDATE
-  kind   text NOT NULL,                    -- QUERY, SUMMARY
+  role   user_role NOT NULL,               -- this schema's own ENUM ('CANDIDATE','RECRUITER','ADMIN')
+  kind   ai_usage_kind NOT NULL,           -- ENUM ('QUERY','SUMMARY')
   count  int NOT NULL DEFAULT 0,
   PRIMARY KEY (day, role, kind)
 );
@@ -1552,9 +1548,9 @@ All updates are upserts (`INSERT … ON CONFLICT DO UPDATE SET count = count + 1
 -- Design v2.0: Analytics' own append-only history. Workflows record facts through POST /internal/facts
 CREATE TABLE facts (
   fact_id     text PRIMARY KEY,                -- workflow id + run id + kind: a retried step is stored once
-  kind        text NOT NULL CONSTRAINT ck_facts_kind CHECK (kind IN ('UserRegistered','RoleGranted','RoleRevoked',
-                'JobReady','JobPublishFailed','ApplicationSubmitted','ApplicationStageChanged',
-                'ApplicationDecisionMade','CandidateScored','SystemFailure','AssistantQueryCompleted')),
+  kind        fact_kind NOT NULL,              -- ENUM ('UserRegistered','RoleGranted','RoleRevoked',
+                -- 'JobReady','JobPublishFailed','ApplicationSubmitted','ApplicationStageChanged',
+                -- 'ApplicationDecisionMade','CandidateScored','SystemFailure','AssistantQueryCompleted')
   occurred_at timestamptz NOT NULL,            -- when it happened (a rebuild replays in this order)
   data        jsonb NOT NULL,                  -- only the fields the metrics need (ids, a title, a stage)
   recorded_at timestamptz NOT NULL DEFAULT now()

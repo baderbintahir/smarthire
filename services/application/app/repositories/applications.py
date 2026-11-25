@@ -9,7 +9,7 @@ from sqlalchemy import func, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.applications import ACTIVE
+from app.domain.applications import ACTIVE, ApplicationStatus
 from app.models import Application, ApplicationNote, ApplicationQuota, AuditEntry, JobReplica, StageHistory
 
 # ---------- quota: one lockable row per candidate ----------
@@ -61,7 +61,7 @@ async def audit(session: AsyncSession, *, actor_id: uuid.UUID, action: str, enti
     await session.flush()
 
 
-async def update_if(session: AsyncSession, application_id: uuid.UUID, *, version: int | None = None, **values) -> bool:
+async def is_application_updated(session: AsyncSession, application_id: uuid.UUID, *, version: int | None = None, **values) -> bool:
     """Conditional write: only an ACTIVE application (and, if given, at the version the client read)
     is changed. False = someone else got there first (decided, withdrew, or edited). The version
     goes up on every change."""
@@ -78,8 +78,8 @@ async def close_submitted(session: AsyncSession, job_id: uuid.UUID) -> list[tupl
     """The job closed: its SUBMITTED applications (not yet screened) become CLOSED. Returns their
     (application_id, candidate_id, stage). Applications a recruiter is already working on stay open."""
     result = await session.execute(
-        update(Application).where(Application.job_id == job_id, Application.status == "SUBMITTED")
-        .values(status="CLOSED", version=Application.version + 1, updated_at=func.now())
+        update(Application).where(Application.job_id == job_id, Application.status == ApplicationStatus.SUBMITTED)
+        .values(status=ApplicationStatus.CLOSED, version=Application.version + 1, updated_at=func.now())
         .returning(Application.id, Application.candidate_id, Application.current_stage)
     )
     return [(row.id, row.candidate_id, row.current_stage) for row in result]

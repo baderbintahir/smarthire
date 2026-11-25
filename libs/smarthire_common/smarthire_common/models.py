@@ -1,7 +1,9 @@
 import uuid
 from datetime import datetime
+from enum import Enum
 
 from sqlalchemy import DateTime, MetaData, func
+from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from uuid6 import uuid7
 
@@ -38,3 +40,12 @@ class TimestampMixin:
 def new_id() -> uuid.UUID:
     """UUIDv7 for public primary keys: time-ordered, so new rows append to the index."""
     return uuid7()
+
+
+def pg_enum(enum_class: type[Enum], name: str) -> SqlEnum:
+    """A column type backed by a native PostgreSQL ENUM (design v2.2): the database itself refuses any value
+    outside the list, without a CHECK constraint. The Python enum is the single source of the values; the
+    column stores the enum's VALUES (e.g. "application/pdf"), not its member names.
+    Migrations create the type (CREATE TYPE ... AS ENUM); adding a value later = ALTER TYPE ... ADD VALUE."""
+    return SqlEnum(enum_class, name=name, values_callable=lambda members: [m.value for m in members],
+                   validate_strings=True)

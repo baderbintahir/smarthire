@@ -7,7 +7,7 @@ from decimal import Decimal
 import pytest
 from alembic import command
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.models import Candidate, Resume
 from app.models.candidate import DOCX, PDF
@@ -57,7 +57,7 @@ async def test_schema_names_match_appendix_e6_exactly(migrated, database_url):
     assert await schema_object_names(database_url, "candidate") == {
         "pk_candidates", "ck_candidates_experience_years_non_negative",
         "pk_resumes", "fk_resumes_candidate_id_candidates", "uq_resumes_object_key",
-        "ck_resumes_content_type", "ck_resumes_size_bytes", "ck_resumes_status",
+        "ck_resumes_content_type", "ck_resumes_size_bytes",
         "uq_resumes_one_active", "ix_resumes_candidate_uploaded",
         }
 
@@ -101,12 +101,17 @@ async def test_experience_cannot_be_negative(session):
         ({"content_type": "application/msword"}, "ck_resumes_content_type"),  # old .doc
         ({"size_bytes": 0}, "ck_resumes_size_bytes"),
         ({"size_bytes": 5 * 1024 * 1024 + 1}, "ck_resumes_size_bytes"),
-        ({"status": "DELETED"}, "ck_resumes_status"),
     ],
 )
 async def test_resume_check_constraints(session, overrides, constraint):
     candidate_id = await add_candidate(session)
     await expect_violation(session, constraint, make_resume(candidate_id, **overrides))
+
+
+async def test_enum_types_reject_unknown_values(session):
+    # Native ENUMs (design v2.2): Postgres itself refuses a value outside the type
+    with pytest.raises(DBAPIError, match="invalid input value for enum"):
+        await session.execute(text("SELECT 'DELETED'::resume_status"))
 
 
 async def test_both_allowed_types_and_the_exact_size_limit_are_accepted(session):

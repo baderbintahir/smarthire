@@ -17,7 +17,7 @@ settings = Settings()
 target_metadata = Base.metadata  # what `alembic revision --autogenerate` compares the DB to
 
 
-def _include_object(obj, name, type_, reflected, compare_to) -> bool:
+def _is_object_included(obj, name, type_, reflected, compare_to) -> bool:
     # Models don't name a schema (search_path does), but the version table is named with an
     # explicit schema, so autogenerate wouldn't recognise it as Alembic's own: skip it
     return not (type_ == "table" and name == "alembic_version")
@@ -27,7 +27,7 @@ def _configure(connection) -> None:
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
-        include_object=_include_object,
+        include_object=_is_object_included,
         # Keep Alembic's own bookkeeping table in the service's schema: the service's DB user
         # has no rights on "public", and each service has its own migration history.
         version_table_schema=settings.db_schema,

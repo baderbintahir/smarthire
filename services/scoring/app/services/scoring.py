@@ -40,7 +40,7 @@ async def score_application(application_id: str, candidate_id: str, job_id: str,
     result = score(job_skills=job["skills"], required_skills=job.get("required_skills", []),
                    candidate_skills=parsed["skills"], min_experience_years=min_experience_years,
                    candidate_years=max(years) if years else None)
-    await scores.save(application_id, {"job_id": job_id, "candidate_id": candidate_id, "score": result["score"],
+    await scores.is_first_score_saved(application_id, {"job_id": job_id, "candidate_id": candidate_id, "score": result["score"],
                                        "rule_score": result["score"], "semantic_score": None,  # Phase 15
                                        "breakdown": result["breakdown"]})
     return result

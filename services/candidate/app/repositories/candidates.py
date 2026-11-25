@@ -6,7 +6,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Candidate, Resume
+from app.models import Candidate, Resume, ResumeStatus
 
 
 async def get(session: AsyncSession, candidate_id: uuid.UUID, *, for_update: bool = False) -> Candidate | None:
@@ -36,19 +36,19 @@ async def get_resume(session: AsyncSession, resume_id: uuid.UUID) -> Resume | No
     return await session.get(Resume, resume_id)
 
 
-async def mark_resume_parsed(session: AsyncSession, resume_id: uuid.UUID, parsed: dict) -> bool:
+async def is_resume_marked_parsed(session: AsyncSession, resume_id: uuid.UUID, parsed: dict) -> bool:
     """UPLOADED -> PARSED, only if still UPLOADED (a duplicate task run finds 0 rows: False)."""
     result = await session.execute(
-        update(Resume).where(Resume.id == resume_id, Resume.status == "UPLOADED")
-        .values(status="PARSED", parsed_data=parsed, parse_error=None, parsed_at=func.now())
+        update(Resume).where(Resume.id == resume_id, Resume.status == ResumeStatus.UPLOADED)
+        .values(status=ResumeStatus.PARSED, parsed_data=parsed, parse_error=None, parsed_at=func.now())
     )
     return result.rowcount == 1
 
 
 async def mark_resume_failed(session: AsyncSession, resume_id: uuid.UUID, error: str) -> None:
     await session.execute(
-        update(Resume).where(Resume.id == resume_id, Resume.status == "UPLOADED")
-        .values(status="FAILED", parse_error=error[:1000], parsed_at=func.now())
+        update(Resume).where(Resume.id == resume_id, Resume.status == ResumeStatus.UPLOADED)
+        .values(status=ResumeStatus.FAILED, parse_error=error[:1000], parsed_at=func.now())
     )
 
 

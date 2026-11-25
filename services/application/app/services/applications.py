@@ -72,20 +72,20 @@ async def mine(session: AsyncSession, user: CurrentUser, *, limit: int, cursor: 
 async def board(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID, *, stage: str | None, limit: int,
                 offset: int) -> tuple[list[Application], JobReplica]:
     # Ownership comes from OUR replica's recruiter_id. Not your job (or unknown): 404, ids aren't confirmed
-    job = await jobs.owned_by(session, job_id, user.user_id)
+    job = await jobs.get_if_owned_by(session, job_id, user.user_id)
     if job is None:
         raise ApplicationNotFoundError()
     return await repo.board(session, job_id, stage=stage, limit=limit, offset=offset), job
 
 
 async def stage_summary(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID) -> dict:
-    if await jobs.owned_by(session, job_id, user.user_id) is None:
+    if await jobs.get_if_owned_by(session, job_id, user.user_id) is None:
         raise ApplicationNotFoundError()  # not your job (or unknown): 404, like the board
     by_stage = await repo.count_by_stage(session, job_id)
     return {"job_id": str(job_id), "total": sum(by_stage.values()), "by_stage": by_stage}
 
 
-async def _load(session: AsyncSession, application_id: uuid.UUID, user: CurrentUser) -> tuple[Application, JobReplica, str]:
+async def _load_visible_to(session: AsyncSession, application_id: uuid.UUID, user: CurrentUser) -> tuple[Application, JobReplica, str]:
     """The application and the caller's relation to it: "candidate" (applicant) or "recruiter" (job
     owner). Anyone else gets 404: applications are private, even their existence."""
     found = await repo.get_with_job(session, application_id)
@@ -101,7 +101,7 @@ async def _load(session: AsyncSession, application_id: uuid.UUID, user: CurrentU
 
 async def detail(session: AsyncSession, user: CurrentUser, application_id: uuid.UUID
                  ) -> tuple[Application, JobReplica, list[StageHistory], list[ApplicationNote] | None]:
-    application, job, relation = await _load(session, application_id, user)
+    application, job, relation = await _load_visible_to(session, application_id, user)
     notes = await repo.notes(session, application_id) if relation == "recruiter" else None
     return application, job, await repo.history(session, application_id), notes
 
@@ -110,7 +110,7 @@ async def detail(session: AsyncSession, user: CurrentUser, application_id: uuid.
 
 
 async def _load_as_recruiter(session, application_id, user) -> tuple[Application, JobReplica]:
-    application, job, relation = await _load(session, application_id, user)
+    application, job, relation = await _load_visible_to(session, application_id, user)
     if relation != "recruiter":
         raise ApplicationNotFoundError()  # the applicant can't act as the recruiter
     return application, job
@@ -159,7 +159,7 @@ async def add_note(session: AsyncSession, user: CurrentUser, application_id: uui
 
 async def withdraw(session: AsyncSession, orchestrator, user: CurrentUser,
                    application_id: uuid.UUID) -> tuple[Application, JobReplica]:
-    application, job, relation = await _load(session, application_id, user)
+    application, job, relation = await _load_visible_to(session, application_id, user)
     if relation != "candidate":
         raise ApplicationNotFoundError()  # only the applicant withdraws
     rules.check_active(application.status)

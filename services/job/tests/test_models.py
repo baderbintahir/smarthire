@@ -6,7 +6,7 @@ import uuid
 import pytest
 from alembic import command
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.models import Job, JobStage
 
@@ -74,13 +74,19 @@ async def test_stages_belong_to_their_job_and_cascade(session):
     [
         ({"title": "AB"}, "ck_jobs_title_length"),
         ({"title": "x" * 201}, "ck_jobs_title_length"),
-        ({"employment_type": "FREELANCE"}, "ck_jobs_employment_type"),
         ({"application_limit": 0}, "ck_jobs_application_limit_positive"),
-        ({"status": "PUBLISHED"}, "ck_jobs_status"),
     ],
 )
 async def test_job_check_constraints(session, overrides, constraint):
     await expect_violation(session, constraint, make_job(**overrides))
+
+
+async def test_enum_types_reject_unknown_values(session):
+    # Native ENUMs (design v2.2): Postgres itself refuses a value outside the type
+    for value, type_name in [("PUBLISHED", "job_status"), ("FREELANCE", "employment_type")]:
+        with pytest.raises(DBAPIError, match="invalid input value for enum"):
+            await session.execute(text(f"SELECT '{value}'::{type_name}"))
+        await session.rollback()
 
 
 async def test_stage_names_and_positions_unique_per_job(session):
@@ -137,8 +143,8 @@ async def test_schema_names_match_appendix_e5_exactly(migrated, database_url):
 
     assert await schema_object_names(database_url, "job") == {
         "pk_jobs", "pk_job_stages", "fk_job_stages_job_id_jobs",
-        "ck_jobs_title_length", "ck_jobs_employment_type", "ck_jobs_application_limit_positive",
-        "ck_jobs_status", "ck_job_stages_position_non_negative",
+        "ck_jobs_title_length", "ck_jobs_application_limit_positive",
+        "ck_job_stages_position_non_negative",
         "uq_job_stages_job_position", "uq_job_stages_job_name",
         "ix_jobs_recruiter_status_created", "ix_jobs_ready_created",
         }

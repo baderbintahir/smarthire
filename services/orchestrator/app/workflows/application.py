@@ -55,7 +55,7 @@ class ApplicationWorkflow(CommitFirst):
 
     @workflow.run
     async def run(self, params: dict) -> str:
-        if not await self.wait_for_commit():
+        if not await self.is_commit_accepted():
             return "REJECTED"
         application, context = self.committed["application"], self.committed["context"]
         application_id, candidate_id, job_id = application["id"], application["candidate_id"], application["job_id"]
@@ -111,7 +111,7 @@ class ApplicationWorkflow(CommitFirst):
 class ApplicationActionWorkflow(CommitFirst):
     @workflow.run
     async def run(self, params: dict) -> str:
-        if not await self.wait_for_commit():
+        if not await self.is_commit_accepted():
             return "REJECTED"
         application, context = self.committed["application"], self.committed["context"]
         application_id, candidate_id = application["id"], application["candidate_id"]

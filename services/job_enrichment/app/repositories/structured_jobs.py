@@ -43,7 +43,7 @@ async def delete(job_id: str, version: int) -> None:
     await _collection().delete_one({"_id": doc_id(job_id, version)})  # deleting twice is fine too
 
 
-async def latest(job_id: str) -> dict | None:
+async def get_latest_version(job_id: str) -> dict | None:
     return await _collection().find_one({"job_id": job_id}, sort=[("version", DESCENDING)])
 
 

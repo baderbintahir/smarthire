@@ -18,9 +18,8 @@ async def test_schema_names_match_appendix_e4_exactly(migrated, database_url):
     from smarthire_common.testing import schema_object_names
 
     assert await schema_object_names(database_url, "identity") == {
-        "pk_users", "ck_users_status", "uq_users_email_lower",
-        "pk_roles", "uq_roles_name",
-        "pk_user_roles", "fk_user_roles_user_id_users", "fk_user_roles_role_id_roles", "ix_user_roles_role_id",
+        "pk_users", "uq_users_email_lower",
+        "pk_user_roles", "fk_user_roles_user_id_users", "ix_user_roles_role",
     }
 
 
@@ -53,8 +52,8 @@ def test_0005_backfills_roles_and_names(migrated, database_url):
         run(sql("INSERT INTO recruiter_profiles (user_id, display_name, company) VALUES (:r, 'Rita Recruiter', 'Acme')",
                 {"r": recruiter}))
         command.upgrade(migrated, "head")
-        rows = run(sql("SELECT u.email, u.full_name, u.current_company, r.name FROM users u "
-                       "JOIN user_roles ur ON ur.user_id = u.id JOIN roles r ON r.id = ur.role_id ORDER BY u.email"))
+        rows = run(sql("SELECT u.email, u.full_name, u.current_company, ur.role::text FROM users u "
+                       "JOIN user_roles ur ON ur.user_id = u.id ORDER BY u.email"))
         assert [tuple(r) for r in rows] == [
             ("cand@x.com", "cand", None, "CANDIDATE"),
             ("rec@x.com", "Rita Recruiter", "Acme", "RECRUITER"),
@@ -86,7 +85,7 @@ def test_0006_downgrade_rebuilds_role_and_recruiter_profiles(migrated, database_
         run(sql("TRUNCATE users CASCADE"))
         run(sql("INSERT INTO users (id, email, password_hash, full_name, current_company) "
                 "VALUES (:u, 'both@x.com', 'h', 'Rita Both', 'Acme')", {"u": both}))
-        run(sql("INSERT INTO user_roles (user_id, role_id) VALUES (:u, 1), (:u, 2)", {"u": both}))
+        run(sql("INSERT INTO user_roles (user_id, role) VALUES (:u, 'CANDIDATE'), (:u, 'RECRUITER')", {"u": both}))
         command.downgrade(migrated, "0005")
         assert run(sql("SELECT role FROM users")) == [("CANDIDATE",)]  # lowest role id
         assert run(sql("SELECT display_name, company FROM recruiter_profiles")) == [("Rita Both", "Acme")]

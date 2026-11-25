@@ -12,6 +12,7 @@ from smarthire_common.auth import denylist_key, revoked_before_key  # one key fo
 from smarthire_common.errors import ConflictError, NotFoundError, ServiceUnavailableError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models import UserStatus
 from app.repositories import sessions as sessions_repo
 from app.repositories import users as users_repo
 
@@ -43,7 +44,7 @@ async def suspend_user(
     user = await users_repo.get_by_id(session, user_id)
     if user is None:
         raise NotFoundError("User not found")
-    await users_repo.set_status(session, user_id, "SUSPENDED")
+    await users_repo.set_status(session, user_id, UserStatus.SUSPENDED)
     await users_repo.bump_token_version(session, user_id)
     # Redis BEFORE commit: if the commit then fails, sessions and tokens are revoked but the user
     # isn't suspended (safe direction). The other order could leave a suspended user with live tokens.

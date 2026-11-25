@@ -90,7 +90,7 @@ class CommitFirst:
             self.rejected = ApplicationError(cause.message, *cause.details, type=BUSINESS_ERROR, non_retryable=True)
             raise self.rejected
 
-    async def wait_for_commit(self) -> bool:
+    async def is_commit_accepted(self) -> bool:
         """In run(): True once committed, False if the commit was rejected. If no commit arrives at all
         (the request was lost, e.g. the orchestrator restarted mid-request), the workflow FAILS after
         COMMIT_DEADLINE: a failed workflow's id may be used again, so the caller's retry starts afresh."""

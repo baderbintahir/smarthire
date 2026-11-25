@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 
 from app.domain.errors import (
     ApplicationNotActiveError,
@@ -20,8 +21,37 @@ from app.domain.errors import (
     QuotaExceededError,
 )
 
-ACTIVE = frozenset({"SUBMITTED", "SCREENING", "IN_PROGRESS"})
-DECISIONS = frozenset({"HIRED", "REJECTED"})
+class ApplicationStatus(StrEnum):
+    """Native PostgreSQL ENUMs (design v2.2) mirror these classes: application_status, score_status,
+    job_status. StrEnum members compare equal to their strings."""
+
+    SUBMITTED = "SUBMITTED"
+    SCREENING = "SCREENING"
+    IN_PROGRESS = "IN_PROGRESS"
+    HIRED = "HIRED"
+    REJECTED = "REJECTED"
+    WITHDRAWN = "WITHDRAWN"
+    CLOSED = "CLOSED"
+
+
+class ScoreStatus(StrEnum):
+    PENDING = "PENDING"
+    SCORED = "SCORED"
+    PENDING_MANUAL = "PENDING_MANUAL"  # scoring gave up: the recruiter reviews it by hand
+
+
+class JobStatus(StrEnum):
+    """The replica's copy of Job's statuses."""
+
+    DRAFT = "DRAFT"
+    PROCESSING = "PROCESSING"
+    READY = "READY"
+    FAILED = "FAILED"
+    CLOSED = "CLOSED"
+
+
+ACTIVE = frozenset({ApplicationStatus.SUBMITTED, ApplicationStatus.SCREENING, ApplicationStatus.IN_PROGRESS})
+DECISIONS = frozenset({ApplicationStatus.HIRED, ApplicationStatus.REJECTED})
 FIRST_STAGE = "SUBMITTED"  # current_stage when an application is created
 
 
@@ -45,7 +75,7 @@ class JobFacts:
 
 
 def check_job_open(job: JobFacts | None, now: datetime) -> None:
-    if job is None or job.status != "READY":
+    if job is None or job.status != JobStatus.READY:
         raise JobNotOpenError("This job is not accepting applications")
     if job.deadline is not None and now >= job.deadline:
         raise JobNotOpenError("The application deadline has passed")

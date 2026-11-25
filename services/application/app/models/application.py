@@ -19,14 +19,10 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
-from smarthire_common.models import Base, TimestampMixin, new_id
+from smarthire_common.models import Base, TimestampMixin, new_id, pg_enum
 
-STATUSES = ("SUBMITTED", "SCREENING", "IN_PROGRESS", "HIRED", "REJECTED", "WITHDRAWN", "CLOSED")
-SCORE_STATUSES = ("PENDING", "SCORED", "PENDING_MANUAL")
+from app.domain.applications import ApplicationStatus, JobStatus, ScoreStatus
 
-
-def _in(column: str, values: tuple[str, ...]) -> str:
-    return f"{column} IN ({', '.join(repr(v) for v in values)})"
 
 
 class JobReplica(Base):
@@ -38,7 +34,7 @@ class JobReplica(Base):
     job_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)  # Job's id (no new id)
     recruiter_id: Mapped[uuid.UUID]
     title: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(Text)
+    status: Mapped[JobStatus] = mapped_column(pg_enum(JobStatus, "job_status"))
     stages: Mapped[list] = mapped_column(JSONB)  # stage names in order
     eligibility_rules: Mapped[dict] = mapped_column(JSONB, server_default=text("'{}'"))
     application_limit: Mapped[int | None]
@@ -51,9 +47,7 @@ class JobReplica(Base):
 class Application(Base, TimestampMixin):
     __tablename__ = "applications"
     __table_args__ = (
-        CheckConstraint(_in("status", STATUSES), name="status"),
         CheckConstraint("score BETWEEN 0 AND 100", name="score_range"),
-        CheckConstraint(_in("score_status", SCORE_STATUSES), name="score_status"),
         # The final guard against applying twice, even when two requests race: 409
         UniqueConstraint("candidate_id", "job_id", name="uq_applications_candidate_job"),
         # Recruiter board: WHERE job_id = ? [AND current_stage = ?] ORDER BY score DESC NULLS LAST
@@ -68,10 +62,12 @@ class Application(Base, TimestampMixin):
     candidate_id: Mapped[uuid.UUID]  # no FK: candidates live in the Candidate service
     # Snapshot at apply time, so the recruiter board is one query (no call per row to Candidate)
     candidate_name: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(Text, server_default=text("'SUBMITTED'"))
+    status: Mapped[ApplicationStatus] = mapped_column(pg_enum(ApplicationStatus, "application_status"),
+                                                      server_default=text("'SUBMITTED'"))
     current_stage: Mapped[str] = mapped_column(Text)
     score: Mapped[Decimal | None] = mapped_column(Numeric(5, 2))  # Phase 10 (Scoring)
-    score_status: Mapped[str] = mapped_column(Text, server_default=text("'PENDING'"))
+    score_status: Mapped[ScoreStatus] = mapped_column(pg_enum(ScoreStatus, "score_status"),
+                                                      server_default=text("'PENDING'"))
     version: Mapped[int] = mapped_column(server_default=text("1"))  # optimistic lock for recruiter edits
 
 

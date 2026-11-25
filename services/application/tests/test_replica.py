@@ -30,7 +30,7 @@ def snapshot(version=1, **changes):
 
 async def sync(snap) -> bool:
     async with db.session_scope() as s:
-        return await replica.sync(s, snap)
+        return await replica.is_snapshot_applied(s, snap)
 
 
 async def close(version) -> list:

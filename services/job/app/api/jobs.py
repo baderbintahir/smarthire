@@ -2,7 +2,6 @@
 case, shape the response. Rules live in app/domain, orchestration in app/services."""
 
 import uuid
-from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request, status
 from smarthire_common.auth import CurrentUser, get_optional_user, require_role
@@ -10,6 +9,7 @@ from smarthire_common.db import get_session
 from smarthire_common.errors import ForbiddenError, UnauthorizedError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.job import EmploymentType, JobStatus
 from app.models import Job, JobStage
 from app.schemas.job import JobIn, JobOut, JobPage, JobUpdate, PublishAccepted, StageOut
 from app.services import jobs as service
@@ -34,8 +34,8 @@ async def create_job(body: JobIn, user: CurrentUser = Depends(recruiter), sessio
 @router.get("", response_model=JobPage)
 async def list_jobs(
     mine: bool = False,  # false: public board (READY only); true: my jobs, any status (recruiters)
-    status_filter: Literal["DRAFT", "PROCESSING", "READY", "FAILED", "CLOSED"] | None = Query(None, alias="status"),
-    employment_type: Literal["FULL_TIME", "PART_TIME", "CONTRACT", "INTERNSHIP"] | None = None,
+    status_filter: JobStatus | None = Query(None, alias="status"),
+    employment_type: EmploymentType | None = None,
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = None,
     user: CurrentUser | None = Depends(get_optional_user),

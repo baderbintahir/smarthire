@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain import applications as rules
+from app.domain.applications import ApplicationStatus, ScoreStatus
 from app.domain.errors import AlreadyAppliedError, ApplicationNotFoundError, VersionConflictError
 from app.models import Application, JobReplica
 from app.repositories import applications as repo
@@ -83,13 +84,13 @@ async def record_score_and_advance(session: AsyncSession, application_id: uuid.U
     if row is None or row[0].status not in rules.ACTIVE:
         return {"advanced": False}
     application, job = row
-    values = ({"score": Decimal(str(score)), "score_status": "SCORED"} if score is not None
-              else {"score_status": "PENDING_MANUAL"})
-    advance = application.status == "SUBMITTED"
+    values = ({"score": Decimal(str(score)), "score_status": ScoreStatus.SCORED} if score is not None
+              else {"score_status": ScoreStatus.PENDING_MANUAL})
+    advance = application.status == ApplicationStatus.SUBMITTED
     if advance:
         values.update(status=SCREENING, current_stage=SCREENING)
     from_stage = application.current_stage
-    await repo.update_if(session, application.id, **values)
+    await repo.is_application_updated(session, application.id, **values)
     if advance:
         await repo.add_history(session, application.id, from_stage=from_stage, to_stage=SCREENING,
                                changed_by=SYSTEM_ACTOR, reason="scored" if score is not None else "score pending (manual)")
@@ -97,8 +98,8 @@ async def record_score_and_advance(session: AsyncSession, application_id: uuid.U
     return {"advanced": advance}
 
 
-async def _write(session: AsyncSession, application_id: uuid.UUID, version: int | None, **values) -> None:
-    if not await repo.update_if(session, application_id, version=version, **values):
+async def _update_active_or_raise(session: AsyncSession, application_id: uuid.UUID, version: int | None, **values) -> None:
+    if not await repo.is_application_updated(session, application_id, version=version, **values):
         await session.rollback()
         # Re-read to tell the two causes apart: it's no longer active, or someone edited it
         fresh = await repo.get_with_job(session, application_id)
@@ -113,7 +114,7 @@ async def change_stage(session: AsyncSession, application_id: uuid.UUID, *, to_s
         return _answer(application, job)  # a retried step
     rules.check_stage_change(application.status, application.current_stage, to_stage, job.stages)
     from_stage = application.current_stage
-    await _write(session, application_id, version, current_stage=to_stage, status="IN_PROGRESS")
+    await _update_active_or_raise(session, application_id, version, current_stage=to_stage, status=ApplicationStatus.IN_PROGRESS)
     await repo.add_history(session, application_id, from_stage=from_stage, to_stage=to_stage, changed_by=actor_id,
                            reason=reason)
     await repo.audit(session, actor_id=actor_id, action="STAGE_CHANGED", entity_id=application_id,
@@ -132,7 +133,7 @@ async def decide(session: AsyncSession, application_id: uuid.UUID, *, decision: 
     stage, candidate_id = application.current_stage, application.candidate_id
     # The conditional UPDATE (only if still ACTIVE) means the quota is released exactly once, even
     # if a decision and a withdrawal arrive at the same moment
-    await _write(session, application_id, version, status=decision)
+    await _update_active_or_raise(session, application_id, version, status=decision)
     await repo.add_history(session, application_id, from_stage=stage, to_stage=decision, changed_by=actor_id,
                            reason=reason)
     await repo.change_quota(session, candidate_id, -1)  # no longer open
@@ -144,11 +145,11 @@ async def decide(session: AsyncSession, application_id: uuid.UUID, *, decision: 
 
 async def withdraw(session: AsyncSession, application_id: uuid.UUID) -> dict:
     application, job = await _found(session, application_id)
-    if application.status == "WITHDRAWN":
+    if application.status == ApplicationStatus.WITHDRAWN:
         return _answer(application, job)  # a retried step
     rules.check_active(application.status)
     stage, candidate_id = application.current_stage, application.candidate_id
-    await _write(session, application_id, None, status="WITHDRAWN")
+    await _update_active_or_raise(session, application_id, None, status=ApplicationStatus.WITHDRAWN)
     await repo.add_history(session, application_id, from_stage=stage, to_stage="WITHDRAWN", changed_by=candidate_id)
     await repo.change_quota(session, candidate_id, -1)  # frees a slot for another application
     await session.commit()

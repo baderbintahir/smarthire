@@ -18,7 +18,7 @@ from app.domain.errors import (
     InvalidCredentialsError,
     InvalidRefreshTokenError,
 )
-from app.models import User
+from app.models import User, UserStatus
 from app.repositories import sessions as sessions_repo
 from app.repositories import users as users_repo
 from app.services import admin
@@ -71,15 +71,15 @@ async def login(
     user = await users_repo.get_by_email(session, email)
     # Always run one full Argon2 verify, even for unknown emails (DUMMY_HASH), so response time
     # doesn't reveal which emails are registered
-    password_ok = passwords.verify_password(user.password_hash if user else passwords.DUMMY_HASH, password)
+    password_ok = passwords.is_password_correct(user.password_hash if user else passwords.DUMMY_HASH, password)
     if user is None or not password_ok:
         await limiter.record_failure(email, ip)
         raise InvalidCredentialsError()
-    if user.status != "ACTIVE":
+    if user.status != UserStatus.ACTIVE:
         raise AccountSuspendedError()
 
     await limiter.reset(email)
-    if passwords.needs_rehash(user.password_hash):
+    if passwords.is_rehash_needed(user.password_hash):
         await users_repo.set_password_hash(session, user, passwords.hash_password(password))
         await session.commit()
 
@@ -118,7 +118,7 @@ async def refresh(
         raise InvalidRefreshTokenError()
 
     user = await users_repo.get_by_id(session, uuid.UUID(user_id))
-    if user is None or user.status != "ACTIVE":
+    if user is None or user.status != UserStatus.ACTIVE:
         await sessions_repo.delete(redis, sid)  # e.g. suspended while a login raced the suspension
         raise InvalidRefreshTokenError()
     access_token = await _access_token(session, user, key=key, settings=settings)

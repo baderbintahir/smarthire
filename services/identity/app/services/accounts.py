@@ -55,7 +55,7 @@ async def grant_role(session: AsyncSession, orchestrator: OrchestratorClient, us
 async def ensure_role(session: AsyncSession, user_id: uuid.UUID, role: str, *, granted_by: uuid.UUID | None) -> User:
     """Commit step: the user holds the role afterwards. Already held (a retried step): nothing changes."""
     user = await _user_or_404(session, user_id)
-    await users_repo.add_role(session, user_id, role, granted_by)  # ON CONFLICT DO NOTHING
+    await users_repo.is_role_added(session, user_id, role, granted_by)  # ON CONFLICT DO NOTHING
     await session.commit()
     return user
 
@@ -81,7 +81,7 @@ async def ensure_revoked(session: AsyncSession, redis: Redis, user_id: uuid.UUID
     kill them all (token_version for Identity, revoked_before for the gateway and every service). Not held
     any more (a retried step): nothing to do."""
     await _user_or_404(session, user_id)
-    if not await users_repo.remove_role(session, user_id, role):
+    if not await users_repo.is_role_removed(session, user_id, role):
         return
     if not await users_repo.get_roles(session, user_id):
         await session.rollback()

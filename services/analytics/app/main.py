@@ -35,7 +35,7 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
         register_readiness_check("database", db_ping_check)
         register_readiness_check("redis", redis_ping_check)
         # The read model is fed ONLY by facts (CQRS): the orchestrator's workflows record them through
-        # POST /internal/facts, and record_fact is the one writer of the projections
+        # POST /internal/facts, and is_new_fact_recorded is the one writer of the projections
         tasks = start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)

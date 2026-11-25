@@ -1,5 +1,5 @@
 """Phase 12 + design v2.0: facts -> projections -> metrics, on real Postgres. Workflows record facts through
-POST /internal/facts; every fact goes through record_fact, which stores it once and applies it once."""
+POST /internal/facts; every fact goes through is_new_fact_recorded, which stores it once and applies it once."""
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -23,7 +23,7 @@ def event(kind: str, data: dict, at: datetime | None = None) -> dict:
 async def feed(*facts):
     for fact in facts:
         async with db.session_scope() as s:
-            await facts_service.record_fact(s, **fact)
+            await facts_service.is_new_fact_recorded(s, **fact)
 
 
 async def numbers() -> dict:
@@ -65,7 +65,7 @@ def test_models_match_migrations(migrated):
     command.check(migrated)
 
 
-# ---------------------------------------------------------------- the metrics, end to end through record_fact
+# ---------------------------------------------------------------- the metrics, end to end through is_new_fact_recorded
 
 
 async def test_all_metrics_from_a_small_story(database):
@@ -181,7 +181,7 @@ async def record(kind: str, data: dict, *, fact_id: str | None = None, at: datet
     from app.services import facts
 
     async with db.session_scope() as s:
-        return await facts.record_fact(s, fact_id=fact_id or str(uuid.uuid4()), kind=kind,
+        return await facts.is_new_fact_recorded(s, fact_id=fact_id or str(uuid.uuid4()), kind=kind,
                                        occurred_at=at or datetime(2026, 11, 3, 10, tzinfo=UTC), data=data)
 
 

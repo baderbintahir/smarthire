@@ -7,6 +7,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.applications import JobStatus
 from app.models import JobReplica
 
 
@@ -14,7 +15,7 @@ async def get(session: AsyncSession, job_id: uuid.UUID) -> JobReplica | None:
     return await session.get(JobReplica, job_id)
 
 
-async def upsert_if_newer(session: AsyncSession, snapshot: dict) -> bool:
+async def is_replica_updated(session: AsyncSession, snapshot: dict) -> bool:
     """Insert the job, or update it ONLY IF the event is newer than what we have. Events can arrive
     late or twice (replays, retries); an old snapshot must never overwrite a newer one.
     Returns False when the event was stale and nothing changed."""
@@ -40,16 +41,16 @@ async def upsert_if_newer(session: AsyncSession, snapshot: dict) -> bool:
     return result.rowcount == 1
 
 
-async def close_if_newer(session: AsyncSession, job_id: uuid.UUID, version: int) -> bool:
+async def is_replica_closed(session: AsyncSession, job_id: uuid.UUID, version: int) -> bool:
     """JobClosed carries no full snapshot, so it can only update a job we already know."""
     result = await session.execute(
         update(JobReplica)
         .where(JobReplica.job_id == job_id, JobReplica.source_version < version)
-        .values(status="CLOSED", source_version=version, updated_at=func.now())
+        .values(status=JobStatus.CLOSED, source_version=version, updated_at=func.now())
     )
     return result.rowcount == 1
 
 
-async def owned_by(session: AsyncSession, job_id: uuid.UUID, recruiter_id: uuid.UUID) -> JobReplica | None:
+async def get_if_owned_by(session: AsyncSession, job_id: uuid.UUID, recruiter_id: uuid.UUID) -> JobReplica | None:
     stmt = select(JobReplica).where(JobReplica.job_id == job_id, JobReplica.recruiter_id == recruiter_id)
     return (await session.execute(stmt)).scalar_one_or_none()

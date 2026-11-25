@@ -18,7 +18,7 @@ async def test_build_is_an_idempotent_upsert(mongo):
     first = await enrichment.build(JOB, 1, DESCRIPTION, ["Python"])
     assert await enrichment.build(JOB, 1, DESCRIPTION, ["Python"]) == first  # a Temporal retry
     assert await count() == 1  # same _id "<job_id>:<version>": rewritten, not duplicated
-    doc = await structured_jobs.latest(JOB)
+    doc = await structured_jobs.get_latest_version(JOB)
     assert doc["_id"] == f"{JOB}:1" and doc["skills"][0] == "python" and doc["required_skills"] == ["python"]
     assert doc["sections"]["benefits"]
 
@@ -26,7 +26,7 @@ async def test_build_is_an_idempotent_upsert(mongo):
 async def test_versions_are_separate_documents_and_latest_wins(mongo):
     await enrichment.build(JOB, 1, DESCRIPTION, ["python"])
     await enrichment.build(JOB, 2, DESCRIPTION, ["python"])
-    assert await count() == 2 and (await structured_jobs.latest(JOB))["version"] == 2
+    assert await count() == 2 and (await structured_jobs.get_latest_version(JOB))["version"] == 2
 
 
 async def test_compensation_deletes_and_is_safe_to_repeat(mongo):

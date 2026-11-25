@@ -50,7 +50,7 @@ def decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
     return datetime.fromisoformat(created_at), uuid.UUID(job_id)
 
 
-async def _page(session: AsyncSession, stmt, *, limit: int, cursor: str | None) -> tuple[list[Job], str | None]:
+async def _fetch_page(session: AsyncSession, stmt, *, limit: int, cursor: str | None) -> tuple[list[Job], str | None]:
     if cursor:
         stmt = stmt.where(tuple_(Job.created_at, Job.id) < decode_cursor(cursor))
     # limit + 1: if the extra row exists, there is a next page
@@ -66,7 +66,7 @@ async def list_ready(
     stmt = select(Job).where(Job.status == "READY")
     if employment_type:
         stmt = stmt.where(Job.employment_type == employment_type)
-    return await _page(session, stmt, limit=limit, cursor=cursor)
+    return await _fetch_page(session, stmt, limit=limit, cursor=cursor)
 
 
 async def list_for_recruiter(
@@ -76,13 +76,13 @@ async def list_for_recruiter(
     stmt = select(Job).where(Job.recruiter_id == recruiter_id)
     if status:
         stmt = stmt.where(Job.status == status)
-    return await _page(session, stmt, limit=limit, cursor=cursor)
+    return await _fetch_page(session, stmt, limit=limit, cursor=cursor)
 
 
 # ---------- conditional writes: the WHERE clause is the safety check ----------
 
 
-async def update_if_version(session: AsyncSession, job_id: uuid.UUID, expected_version: int, **values) -> bool:
+async def is_job_updated_at_version(session: AsyncSession, job_id: uuid.UUID, expected_version: int, **values) -> bool:
     """Optimistic lock: UPDATE ... WHERE id = :id AND version = :expected, and bump the version.
     0 rows updated = someone else saved in between -> False (the caller turns it into a 409).
     Nothing is locked while the user edits; the check happens in the single UPDATE statement."""
@@ -94,21 +94,7 @@ async def update_if_version(session: AsyncSession, job_id: uuid.UUID, expected_v
     return result.rowcount == 1
 
 
-async def set_status_if(session: AsyncSession, job_id: uuid.UUID, *, expected: str, new: str) -> bool:
-    """Moves the status only if it is still what the caller checked: a concurrent publish/close
-    can't both succeed. False = the status changed meanwhile.
-
-    Bumps the version too: EVERY change gets a new version, so each event about this job carries a
-    higher number than the last, and consumers can ignore stale events ("only apply if newer")."""
-    result = await session.execute(
-        update(Job)
-        .where(Job.id == job_id, Job.status == expected)
-        .values(status=new, version=Job.version + 1, updated_at=func.now())
-    )
-    return result.rowcount == 1
-
-
-async def finish_publishing(session: AsyncSession, job_id: uuid.UUID, version: int, status: str) -> bool:
+async def is_publishing_finished(session: AsyncSession, job_id: uuid.UUID, version: int, status: str) -> bool:
     """End of the publishing workflow: PROCESSING -> READY/FAILED, but ONLY for the version that
     workflow was started for (an edit since then made it stale). READY also records published_at the
     first time. False = not applicable (stale, or already done)."""

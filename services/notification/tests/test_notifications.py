@@ -31,7 +31,7 @@ async def test_schema_names_match_appendix_e8_exactly(migrated, database_url):
 
     assert await schema_object_names(database_url, "notification") == {
         "pk_notification_templates", "pk_notification_log", "uq_notification_log_notification_key",
-        "fk_notification_log_template_code_notification_templates", "ck_notification_log_status",
+        "fk_notification_log_template_code_notification_templates",
         "ck_notification_log_attempts_non_negative", "ix_notification_log_status_created",
     }
 

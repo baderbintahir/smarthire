@@ -45,7 +45,7 @@ async def register_user(
         "password_hash": hash_password(password),
         "full_name": full_name,
         "current_company": current_company,
-        "roles": sorted(roles, key=users_repo.ROLE_IDS.get),
+        "roles": users_repo.in_role_order(roles),
     }
     # Give the DB connection back BEFORE waiting for the orchestrator: its commit step calls OUR
     # /internal/users, which needs a connection from the same pool. Holding ours while waiting deadlocked
@@ -66,7 +66,7 @@ async def create_user(session: AsyncSession, *, id, email: str, password_hash: s
     try:
         await users_repo.add(session, user)
         for role in roles:
-            await users_repo.add_role(session, user.id, role, granted_by=None)  # self-granted
+            await users_repo.is_role_added(session, user.id, role, granted_by=None)  # self-granted
         # Commit HERE, not in get_session (its commit runs after the response): a duplicate email
         # must become a 409 answer, not a lost commit after "200"
         await session.commit()

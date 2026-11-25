@@ -38,7 +38,7 @@ class HttpCandidateClient:
         self.breaker = breaker or CircuitBreaker(failures=5, reset_seconds=15)
 
     async def facts(self, authorization: str) -> CandidateFacts:
-        if not self.breaker.allow():
+        if not self.breaker.is_call_allowed():
             raise ServiceUnavailableError(UNAVAILABLE)  # open: don't even try
         try:
             response = await self._http.get("/candidates/me", headers={"Authorization": authorization})

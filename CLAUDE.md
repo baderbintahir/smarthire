@@ -53,7 +53,7 @@ analytics, semantic_index, ai_assistant, bff_web, orchestrator (design v2.1). Ga
    role and ownership.
 8. Shared code lives only in libs/smarthire_common.
 9. Database schemas must match Appendix E of docs/implementation-plan.md:
-   UUIDv7 public IDs, timestamptz, text + CHECK for statuses, explicit
+   UUIDv7 public IDs, timestamptz, native ENUM types for fixed value sets (v2.2), explicit
    constraint names, rules enforced by constraints, indexes from queries.
 10. The gateway (Apache APISIX) holds no business logic: routing, auth, revocation
    checks, rate limits, request IDs only. Data from several services is composed in
@@ -818,3 +818,16 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   different request); role changes are `rerunnable`. Throughput note: the load run accepted far fewer applies than v1
   under 500 users (Temporal's SQLite dev server is now on the synchronous path); not re-measured after the fixes, at the
   user's request (no more stress tests). A production Temporal (Postgres) is the expected answer.
+- DESIGN v2.2 (2026-11-26, implemented): fixed value sets are native PostgreSQL ENUMs (chassis `models.pg_enum(StrEnum,
+  "type_name")`, values_callable = the enum VALUES; migrations use chassis `migration_ops` create_enum/column_to_enum/
+  column_to_text/drop_enum). Types: identity user_status, user_role; job job_status, employment_type; candidate
+  resume_status; application application_status, score_status, job_status (replica); notification email_status;
+  analytics fact_kind, user_role, ai_usage_kind. Each schema owns its own copy of a type. `user_roles.role` replaced the
+  `roles` table + role_id (identity 0008); role order = enum order (`users_repo.in_role_order`). Kept text + CHECK:
+  resumes.content_type (enum labels max 63 bytes; DOCX MIME is 71). GOTCHAS: a partial index whose predicate compares the
+  column (ix_jobs_ready_created) must be dropped and recreated around the type change; drop/create CHECK names with
+  `op.f(...)`; with validate_strings a bad value fails in SQLAlchemy before Postgres (tests cast with `'X'::type`).
+  NAMING: bool-returning functions start with is_/has_ and name the outcome (is_application_updated, is_fact_inserted,
+  is_password_correct, is_commit_accepted, is_call_allowed ...); vague helpers renamed (publishing.workflow_view /
+  finish_publishing, job_replica.get_if_owned_by, structured_jobs.get_latest_version). Live: migrations applied to the dev
+  DB, all unit suites + `make test-workflows` (13) pass.

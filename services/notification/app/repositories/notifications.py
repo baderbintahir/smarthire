@@ -6,7 +6,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import NotificationLog, NotificationTemplate
+from app.models import EmailStatus, NotificationLog, NotificationTemplate
 
 
 async def queue(session: AsyncSession, *, key: str, recipient: str, template_code: str, payload: dict) -> uuid.UUID | None:
@@ -27,19 +27,19 @@ async def lock_for_sending(session: AsyncSession, notification_id: uuid.UUID) ->
     return (row[0], row[1]) if row else None
 
 
-async def exists(session: AsyncSession, notification_id: uuid.UUID) -> bool:
+async def is_email_logged(session: AsyncSession, notification_id: uuid.UUID) -> bool:
     return await session.get(NotificationLog, notification_id) is not None
 
 
 async def mark_sent(session: AsyncSession, notification_id: uuid.UUID) -> None:
     await session.execute(update(NotificationLog).where(NotificationLog.id == notification_id)
-                          .values(status="SENT", sent_at=func.now(), attempts=NotificationLog.attempts + 1, last_error=None))
+                          .values(status=EmailStatus.SENT, sent_at=func.now(), attempts=NotificationLog.attempts + 1, last_error=None))
 
 
 async def record_failure(session: AsyncSession, notification_id: uuid.UUID, error: str, *, final: bool) -> None:
     values = {"attempts": NotificationLog.attempts + 1, "last_error": error[:1000]}
     if final:
-        values["status"] = "FAILED"
+        values["status"] = EmailStatus.FAILED
     await session.execute(update(NotificationLog).where(NotificationLog.id == notification_id).values(**values))
 
 
@@ -50,5 +50,5 @@ async def find_by_key(session: AsyncSession, key: str) -> NotificationLog | None
 async def mark_failed_if_queued(session: AsyncSession, notification_id: uuid.UUID) -> None:
     """Retries ran out (SendEmailWorkflow decided): QUEUED -> FAILED. A SENT email stays SENT."""
     await session.execute(update(NotificationLog)
-                          .where(NotificationLog.id == notification_id, NotificationLog.status == "QUEUED")
-                          .values(status="FAILED"))
+                          .where(NotificationLog.id == notification_id, NotificationLog.status == EmailStatus.QUEUED)
+                          .values(status=EmailStatus.FAILED))

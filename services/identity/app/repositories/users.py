@@ -6,10 +6,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import User, UserRole
-
-# Fixed ids seeded by migration 0005 (roles table)
-ROLE_IDS = {"CANDIDATE": 1, "RECRUITER": 2, "ADMIN": 3}
+from app.models import Role, User, UserRole
 
 
 async def get_by_email(session: AsyncSession, email: str) -> User | None:
@@ -27,30 +24,32 @@ async def add(session: AsyncSession, user: User) -> None:
     await session.flush()  # the users row must exist before user_roles rows reference it
 
 
-ROLE_NAMES = {role_id: name for name, role_id in ROLE_IDS.items()}
+def in_role_order(roles: list[str]) -> list[str]:
+    """CANDIDATE, RECRUITER, ADMIN: the same user always gets the same token claim."""
+    return sorted(roles, key=list(Role).index)
 
 
 async def get_roles(session: AsyncSession, user_id: uuid.UUID) -> list[str]:
-    """The user's roles in a stable order (role id): the same user always gets the same token claim."""
-    stmt = select(UserRole.role_id).where(UserRole.user_id == user_id).order_by(UserRole.role_id)
-    return [ROLE_NAMES[role_id] for role_id in (await session.execute(stmt)).scalars()]
+    # ORDER BY an enum column sorts by declaration order, the same as in_role_order
+    stmt = select(UserRole.role).where(UserRole.user_id == user_id).order_by(UserRole.role)
+    return [str(role) for role in (await session.execute(stmt)).scalars()]
 
 
-async def add_role(session: AsyncSession, user_id: uuid.UUID, role: str, granted_by: uuid.UUID | None) -> bool:
-    """Grants a role. False if the user already holds it. ON CONFLICT on the (user_id, role_id)
+async def is_role_added(session: AsyncSession, user_id: uuid.UUID, role: str, granted_by: uuid.UUID | None) -> bool:
+    """Grants a role. False if the user already holds it. ON CONFLICT on the (user_id, role)
     primary key: two concurrent grants can't both "succeed" or raise mid-transaction."""
     stmt = (
         pg_insert(UserRole)
-        .values(user_id=user_id, role_id=ROLE_IDS[role], granted_by=granted_by)
-        .on_conflict_do_nothing(index_elements=["user_id", "role_id"])
+        .values(user_id=user_id, role=role, granted_by=granted_by)
+        .on_conflict_do_nothing(index_elements=["user_id", "role"])
         .returning(UserRole.user_id)
     )
     return (await session.execute(stmt)).first() is not None
 
 
-async def remove_role(session: AsyncSession, user_id: uuid.UUID, role: str) -> bool:
+async def is_role_removed(session: AsyncSession, user_id: uuid.UUID, role: str) -> bool:
     """False if the user didn't hold the role."""
-    stmt = delete(UserRole).where(UserRole.user_id == user_id, UserRole.role_id == ROLE_IDS[role]).returning(UserRole.user_id)
+    stmt = delete(UserRole).where(UserRole.user_id == user_id, UserRole.role == role).returning(UserRole.user_id)
     return (await session.execute(stmt)).first() is not None
 
 

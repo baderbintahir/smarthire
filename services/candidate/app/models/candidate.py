@@ -5,15 +5,25 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
+from enum import StrEnum
+
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Numeric, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
-from smarthire_common.models import Base, TimestampMixin, new_id
+from smarthire_common.models import Base, TimestampMixin, new_id, pg_enum
 
 PDF = "application/pdf"
 DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+# content_type stays text + CHECK: Postgres enum labels are limited to 63 bytes and the DOCX type is 71
 CONTENT_TYPES = (PDF, DOCX)
-RESUME_STATUSES = ("UPLOADED", "PARSED", "FAILED")
+
+
+class ResumeStatus(StrEnum):
+    """A native PostgreSQL ENUM, resume_status (design v2.2)."""
+
+    UPLOADED = "UPLOADED"
+    PARSED = "PARSED"
+    FAILED = "FAILED"
 MAX_RESUME_BYTES = 5 * 1024 * 1024  # 5242880
 
 
@@ -39,7 +49,6 @@ class Resume(Base):
     __table_args__ = (
         CheckConstraint(_in("content_type", CONTENT_TYPES), name="content_type"),
         CheckConstraint(f"size_bytes > 0 AND size_bytes <= {MAX_RESUME_BYTES}", name="size_bytes"),
-        CheckConstraint(_in("status", RESUME_STATUSES), name="status"),
         # At most ONE active resume per candidate, even if two uploads race: a partial unique
         # index only covers rows WHERE is_active, so inactive (old) resumes don't count
         Index("uq_resumes_one_active", "candidate_id", unique=True, postgresql_where=text("is_active")),
@@ -53,7 +62,8 @@ class Resume(Base):
     file_name: Mapped[str] = mapped_column(Text)  # the uploader's name for it, for display only
     content_type: Mapped[str] = mapped_column(Text)
     size_bytes: Mapped[int]
-    status: Mapped[str] = mapped_column(Text, server_default=text("'UPLOADED'"))
+    status: Mapped[ResumeStatus] = mapped_column(pg_enum(ResumeStatus, "resume_status"),
+                                                 server_default=text("'UPLOADED'"))
     parsed_data: Mapped[dict | None] = mapped_column(JSONB)  # Phase 10
     parse_error: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(server_default=text("true"))

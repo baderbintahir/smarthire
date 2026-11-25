@@ -17,7 +17,7 @@ from app.workflows.base import COMMIT_RETRY, CommitFirst, call, record_fact, rej
 class RegistrationWorkflow(CommitFirst):
     @workflow.run
     async def run(self, params: dict) -> str:
-        if not await self.wait_for_commit():
+        if not await self.is_commit_accepted():
             return "REJECTED"
         user = self.committed
         if "CANDIDATE" in user["roles"]:
@@ -41,7 +41,7 @@ class RegistrationWorkflow(CommitFirst):
 class RoleChangeWorkflow(CommitFirst):
     @workflow.run
     async def run(self, params: dict) -> str:
-        if not await self.wait_for_commit():
+        if not await self.is_commit_accepted():
             return "REJECTED"
         user_id, role = params["user_id"], params["role"]
         if "revoked_by" in params:

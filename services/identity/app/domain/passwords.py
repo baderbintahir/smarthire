@@ -12,14 +12,14 @@ def hash_password(password: str) -> str:
     return _hasher.hash(password)  # new random salt every call
 
 
-def verify_password(password_hash: str, password: str) -> bool:
+def is_password_correct(password_hash: str, password: str) -> bool:
     try:
         return _hasher.verify(password_hash, password)
     except (VerificationError, InvalidHashError):
         return False
 
 
-def needs_rehash(password_hash: str) -> bool:
+def is_rehash_needed(password_hash: str) -> bool:
     """True if the hash was made with weaker parameters than today's defaults. On a successful
     login we re-hash, so stored hashes upgrade themselves over time."""
     return _hasher.check_needs_rehash(password_hash)

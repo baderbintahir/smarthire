@@ -13,6 +13,13 @@ from enum import StrEnum
 from app.domain.errors import InvalidJobStagesError, JobNotEditableError, JobTransitionError
 
 
+class EmploymentType(StrEnum):
+    FULL_TIME = "FULL_TIME"
+    PART_TIME = "PART_TIME"
+    CONTRACT = "CONTRACT"
+    INTERNSHIP = "INTERNSHIP"
+
+
 class JobStatus(StrEnum):
     DRAFT = "DRAFT"
     PROCESSING = "PROCESSING"  # the publishing workflow (Phase 9) is extracting/enriching it

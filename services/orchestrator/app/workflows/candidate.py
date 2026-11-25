@@ -17,7 +17,7 @@ from app.workflows.base import COMMIT_RETRY, CommitFirst, business_error, call
 class ResumeProcessingWorkflow(CommitFirst):
     @workflow.run
     async def run(self, params: dict) -> str:
-        if not await self.wait_for_commit():
+        if not await self.is_commit_accepted():
             return "REJECTED"
         resume_id = self.committed["id"]
         try:

@@ -102,20 +102,20 @@ class JWKSClient:
         # Refresh if allowed, OR if another request's refresh is in flight right now: then wait for its
         # result (_refresh takes the lock, sees the attempt was just made and returns). Without the second
         # part, a burst of first requests after a restart all got 503 while one fetch was still running
-        if (stale or kid not in self._keys) and (self._may_refresh(now) or self._lock.locked()):
+        if (stale or kid not in self._keys) and (self._is_refresh_allowed(now) or self._lock.locked()):
             await self._refresh()
         if not self._keys:
             # Never managed to load any key: we can't tell good tokens from bad ones
             raise ServiceUnavailableError("Token verification is temporarily unavailable")
         return self._keys.get(kid)
 
-    def _may_refresh(self, now: float) -> bool:
+    def _is_refresh_allowed(self, now: float) -> bool:
         return now - self._last_attempt >= self.min_refresh_interval
 
     async def _refresh(self) -> None:
         async with self._lock:
             now = self._clock()
-            if not self._may_refresh(now):  # someone else refreshed while we waited for the lock
+            if not self._is_refresh_allowed(now):  # someone else refreshed while we waited for the lock
                 return
             self._last_attempt = now
             try:

@@ -13,7 +13,7 @@ router = APIRouter(tags=["structured jobs"])
 
 @router.get("/jobs/{job_id}/structured", response_model=StructuredJobOut)
 async def get_structured(job_id: str):
-    doc = await structured_jobs.latest(job_id)
+    doc = await structured_jobs.get_latest_version(job_id)
     if doc is None:
         raise NotFoundError("No structured data for this job", code="STRUCTURED_JOB_NOT_FOUND")
     return StructuredJobOut.from_doc(doc)

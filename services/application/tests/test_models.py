@@ -6,7 +6,7 @@ import uuid
 import pytest
 from alembic import command
 from sqlalchemy import text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.models import Application, ApplicationNote, ApplicationQuota, JobReplica
 
@@ -55,7 +55,7 @@ async def test_schema_names_match_appendix_e7_exactly(migrated, database_url):
     assert await schema_object_names(database_url, "application") == {
         "pk_job_replica",
         "pk_applications", "fk_applications_job_id_job_replica", "uq_applications_candidate_job",
-        "ck_applications_status", "ck_applications_score_range", "ck_applications_score_status",
+        "ck_applications_score_range",
         "ix_applications_job_stage_score", "ix_applications_candidate_created",
         "pk_application_stage_history", "fk_application_stage_history_application_id_applications",
         "ix_stage_history_app_changed",
@@ -91,15 +91,21 @@ async def test_application_needs_a_known_job(session):
 @pytest.mark.parametrize(
     ("overrides", "constraint"),
     [
-        ({"status": "ACCEPTED"}, "ck_applications_status"),
         ({"score": 100.5}, "ck_applications_score_range"),
         ({"score": -1}, "ck_applications_score_range"),
-        ({"score_status": "DONE"}, "ck_applications_score_status"),
     ],
 )
 async def test_application_check_constraints(session, overrides, constraint):
     job_id = await add_job(session)
     await expect_violation(session, constraint, make_application(job_id, **overrides))
+
+
+async def test_enum_types_reject_unknown_values(session):
+    # Native ENUMs (design v2.2): Postgres itself refuses a value outside the type
+    for value, type_name in [("ACCEPTED", "application_status"), ("DONE", "score_status"), ("OPEN", "job_status")]:
+        with pytest.raises(DBAPIError, match="invalid input value for enum"):
+            await session.execute(text(f"SELECT '{value}'::{type_name}"))
+        await session.rollback()
 
 
 async def test_quota_cannot_go_negative(session):

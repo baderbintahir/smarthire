@@ -21,6 +21,7 @@ from smarthire_common.db import session_scope
 from smarthire_common.telemetry import get_tracer
 
 from app.domain.templates import render
+from app.models import EmailStatus
 from app.repositories import notifications as repo
 
 breaker = pybreaker.CircuitBreaker(fail_max=3, reset_timeout=30)  # one per worker process
@@ -50,9 +51,9 @@ async def send(notification_id: uuid.UUID, mailer: Callable[[str, str, str], Non
     async with session_scope() as session:
         locked = await repo.lock_for_sending(session, notification_id)
         if locked is None:
-            return "busy" if await repo.exists(session, notification_id) else "missing"
+            return "busy" if await repo.is_email_logged(session, notification_id) else "missing"
         log, template = locked
-        if log.status != "QUEUED":
+        if log.status != EmailStatus.QUEUED:
             return "skipped"  # SENT or FAILED already: a duplicate task
         subject, body = render(template.subject, template.body, log.payload)
         try:

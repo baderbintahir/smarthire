@@ -120,7 +120,7 @@ async def update_job(
     # A draft (or a failed publish): nobody else knows it yet, so a plain write
     # The check and the write are ONE statement: between our read above and this UPDATE, another
     # recruiter could have saved; the version condition catches that
-    if not await jobs_repo.update_if_version(session, job_id, data.version, status=new_status, **_content(data)):
+    if not await jobs_repo.is_job_updated_at_version(session, job_id, data.version, status=new_status, **_content(data)):
         raise JobVersionConflictError()
     await jobs_repo.replace_stages(session, job_id, stages)
     await session.commit()

@@ -30,7 +30,7 @@ class AtVersion(BaseModel):
 
 @router.put("/job-replicas/{job_id}")
 async def sync_job_replica(job_id: uuid.UUID, snapshot: dict, session: AsyncSession = Depends(get_session)) -> dict:
-    return {"updated": await replica.sync(session, {**snapshot, "job_id": str(job_id)})}
+    return {"updated": await replica.is_snapshot_applied(session, {**snapshot, "job_id": str(job_id)})}
 
 
 @router.post("/job-replicas/{job_id}/close")

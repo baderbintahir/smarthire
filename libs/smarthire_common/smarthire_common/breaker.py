@@ -18,7 +18,7 @@ class CircuitBreaker:
         self.max_failures, self.reset_seconds = failures, reset_seconds
         self.failures, self.opened_at = 0, None
 
-    def allow(self) -> bool:
+    def is_call_allowed(self) -> bool:
         if self.opened_at is None:
             return True
         if time.monotonic() - self.opened_at >= self.reset_seconds:

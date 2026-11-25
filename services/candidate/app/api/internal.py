@@ -17,6 +17,7 @@ from smarthire_common.service_auth import require_orchestrator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.errors import CandidateNotFoundError
+from app.models import ResumeStatus
 from app.repositories import candidates as repo
 from app.schemas.candidate import ResumeOut
 from app.services import candidates as service
@@ -87,7 +88,7 @@ async def parse_resume(resume_id: uuid.UUID) -> dict:
         raise NotFoundError("Resume not found", code="RESUME_NOT_FOUND")
     if outcome == "skipped":  # a repeated step: answer what the first run decided
         async with session_scope() as session:
-            outcome = "parsed" if (await repo.get_resume(session, resume_id)).status == "PARSED" else "failed"
+            outcome = "parsed" if (await repo.get_resume(session, resume_id)).status == ResumeStatus.PARSED else "failed"
     if outcome == "failed":
         raise AppError("The resume could not be read", code="RESUME_UNREADABLE", http_status=422)
     return {"status": "PARSED"}
