@@ -1163,30 +1163,27 @@ You understand your system when you can do each of these **yourself**, then conf
 
 ---
 
-# Appendix A — Kafka topics
+# Appendix A — Actions and workflows (design v2.1; Kafka topics before v2.0, see git history)
 
-| Topic | Key | Events | Consumers |
-| --- | --- | --- | --- |
-| identity.users | user_id | UserRegistered, RoleGranted, RoleRevoked, UserProfileUpdated | candidate, analytics |
-| jobs.lifecycle | job_id | JobUpdated, JobReady, JobPublishFailed, JobClosed | application, notification, analytics |
-| jobs.commands | job_id | JobPublishRequested | job (workflow starter) |
-| candidates.profile | candidate_id | ResumeUploaded, ResumeParsed | semantic_index, analytics |
-| applications.lifecycle | application_id | ApplicationSubmitted, ApplicationStageChanged, ApplicationDecisionMade | application (workflow starter), notification, analytics |
-| scoring.results | application_id | CandidateScored | analytics |
-| assistant.usage | user_id | AssistantQueryCompleted | analytics |
-| system.failures | source | SystemFailure | analytics |
-| *.dlq | same | failed messages | manual reprocessing |
+Services start actions with `POST /actions/{action}` on the orchestrator; every workflow runs there.
+
+| Action | Started by | Workflow | Workflow id | Commit step |
+| --- | --- | --- | --- | --- |
+| register | Identity | RegistrationWorkflow | register-{sha256(email)} | POST identity /internal/users |
+| grant-role, revoke-role | Identity | RoleChangeWorkflow | role-{user}-{role}-grant / -revoke (rerunnable) | POST / DELETE identity /internal/users/{id}/roles |
+| publish-job, edit-ready-job | Job | JobPublishingWorkflow | publish-{job}-v{version} | POST job /internal/jobs/{id}/processing |
+| close-job | Job | JobClosingWorkflow | close-{job} | POST job /internal/jobs/{id}/close |
+| upload-resume | Candidate | ResumeProcessingWorkflow | resume-{resume} | POST candidate /internal/resumes |
+| apply | Application | ApplicationWorkflow | application-{job}-{candidate} | POST application /internal/applications |
+| change-stage, decide, withdraw | Application | ApplicationActionWorkflow | stage-{app}-v{version}, decision-{app}, withdraw-{app} | POST application /internal/applications/{id}/... |
+| (child of the above) | | SendEmailWorkflow | email-{parent id}-{template} | none |
 
 # Appendix B — Temporal task queues
 
 | Task queue | Worker lives in | Runs |
 | --- | --- | --- |
-| job-tq | job | JobPublishingWorkflow, set_processing, mark_ready, mark_failed |
-| enrichment-tq | job_enrichment | extract_skills, breakdown_jd, store_structured_job, delete_structured_job |
-| semantic-tq | semantic_index | embed_and_index_job, delete_job_vector |
-| application-tq | application | ApplicationWorkflow, init_stages, record_score_and_advance |
-| scoring-tq | scoring | score_application |
-| assistant-tq | ai_assistant | long-running assistant jobs |
+| orchestrator-tq | orchestrator (2 replicas) | every workflow; the one activity `call_service` (an HTTP call to a service's /internal/* endpoint) |
+| semantic-tq, assistant-tq | (Part B) | to be decided: under v2.1 these become orchestrator steps calling the services' internal endpoints |
 
 # Appendix C — Reusable prompts for Claude
 
@@ -1552,6 +1549,8 @@ CREATE TABLE ai_usage_daily (
 All updates are upserts (`INSERT … ON CONFLICT DO UPDATE SET count = count + 1`) inside the same transaction as the `processed_events` insert. This schema is a **disposable read model**: it can be dropped and rebuilt by replaying events.
 
 ## E.10 Shared tables (every PostgreSQL service that publishes or consumes)
+
+> **Removed in design v2.0 (Phase 14T, Step T10).** No service has `outbox` or `processed_events` any more: follow-ups are orchestrator workflow steps, and steps are idempotent by their own keys. Analytics keeps an append-only `facts` table instead (E.9). The definitions below are kept for history (the contract migrations recreate them on downgrade).
 
 ```sql
 CREATE TABLE outbox (

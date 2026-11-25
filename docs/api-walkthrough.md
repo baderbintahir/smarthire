@@ -24,8 +24,7 @@ Verified end to end with newman: 44 requests, 0 failures.
   (`-c jar -b jar`). A refresh uses the cookie of the most recent login.
 - Every error has the shape `{"error": {"code", "message", "request_id", "details?"}}`.
 
-**Where to watch** the background work: Temporal UI http://localhost:8088 (workflows), Kafka UI
-http://localhost:8085 (events), Mailpit http://localhost:8025 (emails), Jaeger http://localhost:16686
+**Where to watch** the background work: Temporal UI http://localhost:8088 (workflows), Mailpit http://localhost:8025 (emails), Jaeger http://localhost:16686
 (traces), Grafana http://localhost:3001 (dashboards).
 
 ## 1 Auth

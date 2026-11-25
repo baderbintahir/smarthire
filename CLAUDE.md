@@ -30,22 +30,23 @@ Each phase/step may run in a fresh conversation. Do not expect prior chat contex
 
 ## Stack
 Python 3.12, FastAPI, uv, PostgreSQL (SQLAlchemy 2.0 async + Alembic),
-MongoDB (Motor), Redis, Celery + RabbitMQ, Kafka + Schema Registry
-(confluent-kafka), Temporal (temporalio), MinIO, Qdrant, LangGraph,
+MongoDB (PyMongo async), Redis, Temporal (temporalio, orchestrator only), MinIO, Qdrant, LangGraph,
 OpenTelemetry, Jaeger, Prometheus, Grafana, Docker Compose, pytest.
 
 ## Services
 identity, job, job_enrichment, candidate, application, scoring, notification,
-analytics, semantic_index, ai_assistant, bff_web. Gateway: Apache APISIX (config in infra/apisix).
+analytics, semantic_index, ai_assistant, bff_web, orchestrator (design v2.1). Gateway: Apache APISIX (config in infra/apisix).
 
 ## Architecture rules (never break these)
 1. Database per service: a service never reads another service's tables.
 2. Cross-service data comes only from that service's API or its events.
-3. Every DB state change that others care about writes an outbox row in the
-   same transaction. Never publish to Kafka directly from a request handler.
-4. Every Kafka consumer and Celery task is idempotent (processed_events table).
-5. Temporal for multi-step workflows that must complete or compensate;
-   Kafka for side effects; Celery for fire-and-forget background tasks.
+3. A change other services must react to is the FIRST STEP (commit) of an orchestrator workflow: the
+   service calls `OrchestratorClient.run_action` and the orchestrator calls back its `/internal/*` endpoint.
+   Changes nobody reacts to are plain writes. Never call another service's write endpoint from a handler.
+4. Every workflow step (internal endpoint) is idempotent: ids made by the caller, conditional updates,
+   unique keys; it answers the same when run twice. Business "no" = 4xx (not retried), anything else 5xx.
+5. Only the orchestrator talks to Temporal (design v2.1). Follow-ups are workflow steps; fire-and-forget
+   work (email) is a child workflow. No Kafka, no Celery.
 6. Routers handle HTTP only; business rules live in app/domain; DB access in
    app/repositories.
 7. JWT (RS256) is verified at the gateway AND in each service. Services check
@@ -99,12 +100,12 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 13 Observability: [x] 13.1 jaeger/prometheus/grafana + /metrics · [x] 13.2 OTel chassis · [x] 13.3 async propagation · [x] 13.4 metrics · [x] 13.5 failures topic · [x] 13.6 dashboards · [x] 13.7 gateway telemetry · [x] 13.8 Kafka vs Temporal (chassis 101, all service suites pass, gateway 14, events e2e 15; break-its verified)
 - [ ] Phase 14 Reliability + load tests (tag v0.1-core): [x] 14.1 failure-path review · [x] 14.2 breakers + APISIX checks · [x] 14.3 backpressure · [x] 14.3b retention jobs · [x] 14.4 load test · [x] 14.5 chaos · [ ] 14.6 checkpoint (doc written; needs the user's screenshots, then tag v0.1-core)
 - [x] Phase 14R Review 1 changes (design v1.2, docs/architecture.html): [x] R0 plan sync · [x] R1 identity schema expand · [x] R2 chassis roles · [x] R3 identity roles/profile/events · [x] R4 refresh sessions in Redis · [x] R5 candidate · [x] R6 application · [x] R7 job/analytics/bff · [x] R8 contract migration · [x] R9 e2e + Postman
-- [ ] Phase 14T Temporal replaces Kafka and Celery via an orchestrator (design v2.0 + v2.1): [x] T0 plan · [x] T1 spike · [x] T2 chassis · [x] T3 orchestrator service · [x] T4 analytics facts · [x] T5 SendEmailWorkflow · [x] T6 identity · [x] T7 resumes · [x] T8 jobs · [x] T9 applications · [x] T10 remove old path · [ ] T11 e2e + docs
+- [x] Phase 14T Temporal replaces Kafka and Celery via an orchestrator (design v2.0 + v2.1): [x] T0 plan · [x] T1 spike · [x] T2 chassis · [x] T3 orchestrator service · [x] T4 analytics facts · [x] T5 SendEmailWorkflow · [x] T6 identity · [x] T7 resumes · [x] T8 jobs · [x] T9 applications · [x] T10 remove old path · [x] T11 e2e + docs
 - [ ] Phase 15 Semantic index
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** Phase 14T, Step T11 (end to end and docs). Still open: 14.6 (screenshots, tag v0.1-core). Part B comes after 14T (its semantic index plugs into the v2.0 workflows instead of Kafka) on branch `part-b` (its 15.1 work is in `git stash` on part-b: `git checkout part-b && git stash pop`).
+**Next step:** wait for the user's next design change. Still open: 14.6 (screenshots, tag v0.1-core). Part B comes after 14T (its semantic index plugs into the v2.0 workflows instead of Kafka) on branch `part-b` (its 15.1 work is in `git stash` on part-b: `git checkout part-b && git stash pop`).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -799,3 +800,21 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   redeployed (candidate-worker container removed, candidate-parser added); newman folders 1-9: 44 requests, 21 assertions,
   0 failures, all through the orchestrator (16 workflows completed, 11 facts, application HIRED with score 95, resume
   PARSED, 5 emails SENT via SendEmailWorkflow). Kafka and Celery carried nothing.
+- 14T DONE (2026-11-26). T10 removed Kafka, Schema Registry, Kafka UI, RabbitMQ, Celery (workers, beat), the outbox and
+  processed_events (contract migrations: identity 0007, job/candidate 0004, application/notification 0002, analytics
+  0003), chassis events/outbox/kafka/mongo_outbox/celery/event_catalog/schemas, `make schemas`. The kafkadata and
+  rabbitmqdata Docker VOLUMES were left in place (remove by hand if wanted). tests/events -> tests/workflows
+  (`make test-workflows`, 13 tests incl. orchestrator-down 503 and scoring-down recovery). Alerts: WorkflowFailed,
+  WorkersFallingBehind, WorkflowStepsFailing (5xx on /internal/*), ActivitiesRetrying. Results: all unit suites pass,
+  gateway 14, workflows 13, newman 44/0.
+- T11 LOAD TEST FINDINGS (fixed in f151289): (1) Identity held its DB connection while waiting for the orchestrator,
+  whose commit step needs a connection from the same pool: pool deadlock under 20 parallel registrations -> every
+  public endpoint that calls run_action must `await session.rollback()` first (all do now). (2) Commit wait 10 s + client
+  12 s exceeded the gateway's 10 s: clients saw 504 although the work committed -> commit_wait 7 s, client 9 s.
+  (3) Update-with-Start can start a workflow whose commit update is lost (orchestrator restarted mid-request): it waited
+  forever -> wait_for_commit fails after COMMIT_DEADLINE (5 min); ids use reuse policy ALLOW_DUPLICATE_FAILED_ONLY, so the
+  retry starts afresh. (4) A retry after the workflow FINISHED ran a second time (duplicate emails/facts) -> finished ids
+  are not reused; POST /actions answers from the workflow's `commit_outcome` query (same_request check -> 409 for a
+  different request); role changes are `rerunnable`. Throughput note: the load run accepted far fewer applies than v1
+  under 500 users (Temporal's SQLite dev server is now on the synchronous path); not re-measured after the fixes, at the
+  user's request (no more stress tests). A production Temporal (Postgres) is the expected answer.
