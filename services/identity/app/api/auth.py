@@ -11,12 +11,11 @@ from app.api.deps import (
     CurrentUser,
     get_current_user,
     get_login_rate_limiter,
+    get_orchestrator,
     get_settings,
     get_signing_key,
     require_role,
 )
-from app.api.users import to_user_out
-from app.repositories import users as users_repo
 from app.config import Settings
 from app.domain.tokens import SigningKey
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserOut
@@ -49,16 +48,19 @@ def _clear_refresh_cookie(response: Response, settings: Settings) -> None:
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=UserOut)
-async def register(body: RegisterRequest, session: AsyncSession = Depends(get_session)):
-    user, roles = await registration.register_user(
+async def register(body: RegisterRequest, session: AsyncSession = Depends(get_session),
+                   orchestrator=Depends(get_orchestrator)):
+    """Design v2.1: the orchestrator's RegistrationWorkflow creates the user (its first step, which we wait
+    for), then the candidate profile and the analytics fact. Orchestrator down -> 503, no user created."""
+    return await registration.register_user(
         session,
+        orchestrator,
         email=body.email,
         password=body.password,
         full_name=body.full_name,
         roles=body.roles,
         current_company=body.current_company,
     )
-    return to_user_out(user, sorted(roles, key=users_repo.ROLE_IDS.get))  # same order as everywhere else
 
 
 @router.post("/login", response_model=TokenResponse)

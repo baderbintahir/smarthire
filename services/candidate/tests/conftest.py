@@ -85,6 +85,11 @@ def tokens():
     return testing.TokenFactory()
 
 
+@pytest.fixture(scope="session")
+def service_tokens():
+    return testing.ServiceTokenFactory()  # the orchestrator's tokens for /internal/*
+
+
 @pytest.fixture
 def settings(migrated, database_url, redis_url, minio):
     from app.config import Settings
@@ -101,7 +106,7 @@ def settings(migrated, database_url, redis_url, minio):
 
 
 @pytest.fixture
-def client(settings, database_url, redis_url, minio, tokens):
+def client(settings, database_url, redis_url, minio, tokens, service_tokens):
     from fastapi.testclient import TestClient
 
     from app.main import create_app
@@ -111,5 +116,6 @@ def client(settings, database_url, redis_url, minio, tokens):
     _, s3 = minio
     for obj in list(s3.list_objects(BUCKET, recursive=True)):
         s3.remove_object(BUCKET, obj.object_name)
-    with TestClient(create_app(settings, key_provider=tokens.key_provider)) as c:
+    with TestClient(create_app(settings, key_provider=tokens.key_provider,
+                               service_key_provider=service_tokens.key_provider)) as c:
         yield c

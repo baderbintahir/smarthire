@@ -3,33 +3,18 @@ after the event id was recorded in processed_events (see smarthire_common.kafka)
 event even if Kafka delivers it twice."""
 
 import asyncio
-import uuid
 
 from smarthire_common.celery import make_celery
 from smarthire_common.events import EventEnvelope
 from smarthire_common.kafka import RetryLater
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.repositories import candidates as repo
 from app.tasks.names import PARSE_RESUME, QUEUE
 
 CONSUMER_NAME = "candidate"  # the consumer group: replicas of this service share the work
-TOPICS = ["identity.users", "candidates.profile"]  # the second is our own: ResumeUploaded -> parse it
-
-
-async def on_user_registered(session: AsyncSession, event: EventEnvelope) -> None:
-    """A new user holding CANDIDATE gets an empty profile (same id as their user). Other roles: nothing to do.
-    `roles` arrived in schema v2 (design v1.1); v1 events (replays) only have the single `role`."""
-    roles = event.payload.get("roles") or [event.payload["role"]]
-    if "CANDIDATE" in roles:
-        await repo.create_empty(session, uuid.UUID(event.payload["user_id"]))
-
-
-async def on_role_granted(session: AsyncSession, event: EventEnvelope) -> None:
-    """Someone (e.g. a recruiter) took the CANDIDATE role later: they get a profile now. create_empty
-    does nothing if one exists, so a granted-revoked-granted user keeps their old profile."""
-    if event.payload["role"] == "CANDIDATE":
-        await repo.create_empty(session, uuid.UUID(event.payload["user_id"]))
+# Our own topic only: ResumeUploaded -> parse it (until Step T7). Profiles for new users and granted
+# CANDIDATE roles come from the orchestrator's workflows now (PUT /internal/candidates/{id}, design v2.1)
+TOPICS = ["candidates.profile"]
 
 
 def build_handlers(settings) -> dict:
@@ -48,4 +33,4 @@ def build_handlers(settings) -> dict:
         except Exception as exc:
             raise RetryLater(f"task queue unavailable: {exc}") from exc
 
-    return {"UserRegistered": on_user_registered, "RoleGranted": on_role_granted, "ResumeUploaded": on_resume_uploaded}
+    return {"ResumeUploaded": on_resume_uploaded}

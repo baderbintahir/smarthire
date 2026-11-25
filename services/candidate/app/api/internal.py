@@ -3,20 +3,23 @@
 The gateway only routes /api/candidates/* (rewritten to /candidates/*), so /internal/* can't be reached
 from outside; inside Compose only other services can call it (and the service port is published on
 127.0.0.1 only). There is no user token on these calls (a Temporal activity has no user), so access is
-controlled by the network, for now.
-TODO(Phase 14): service-to-service authentication (service tokens or mTLS) on /internal/*."""
+controlled by the network for the read-only endpoints. Endpoints that CHANGE data are workflow steps
+(design v2.1): they require the orchestrator's token and an Idempotency-Key, and are safe to run twice."""
 
 import uuid
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from smarthire_common.db import get_session
+from smarthire_common.internal import idempotency_key
+from smarthire_common.service_auth import require_orchestrator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.errors import CandidateNotFoundError
 from app.repositories import candidates as repo
 
 router = APIRouter(prefix="/internal", tags=["internal"])
+COMMIT_STEP = [Depends(require_orchestrator), Depends(idempotency_key)]
 
 
 class ResumeFacts(BaseModel):
@@ -45,3 +48,12 @@ async def candidate_resume(candidate_id: uuid.UUID, session: AsyncSession = Depe
         resume=ResumeFacts(resume_id=resume.id, status=resume.status, parsed_data=resume.parsed_data,
                            parse_error=resume.parse_error) if resume else None,
     )
+
+
+@router.put("/candidates/{candidate_id}", dependencies=COMMIT_STEP)
+async def create_profile(candidate_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    """create_candidate_profile step (RegistrationWorkflow, RoleChangeWorkflow): an empty profile with the
+    user's id, unless one exists (a retried step, or a granted-revoked-granted user keeps their old one)."""
+    await repo.create_empty(session, candidate_id)
+    await session.commit()
+    return {"candidate_id": str(candidate_id)}

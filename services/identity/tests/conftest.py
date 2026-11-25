@@ -66,11 +66,32 @@ def settings(migrated, database_url, redis_url, private_key_path) -> Settings:
     )
 
 
+@pytest.fixture(scope="session")
+def service_tokens():
+    return testing.ServiceTokenFactory()  # the orchestrator's tokens for /internal/*
+
+
+# The commit step of each action, exactly as the orchestrator's workflows call it (design v2.1)
+COMMITS = {
+    "register": lambda i: ("POST", "/internal/users", i["user"]),
+    "grant-role": lambda i: ("POST", f"/internal/users/{i['user_id']}/roles",
+                             {"role": i["role"], "granted_by": i["granted_by"]}),
+    "revoke-role": lambda i: ("DELETE", f"/internal/users/{i['user_id']}/roles/{i['role']}", None),
+}
+
+
 @pytest.fixture
-def client(settings):
+def orchestrator(service_tokens):
+    return testing.FakeOrchestrator(service_tokens, COMMITS)
+
+
+@pytest.fixture
+def client(settings, orchestrator, service_tokens):
     # CASCADE also empties user_roles; the seeded roles table stays
     run(testing.truncate(settings.database_url, ["users", "outbox"]))
     run(testing.flush_redis(settings.redis_url))
+    app = create_app(settings, orchestrator=orchestrator, service_key_provider=service_tokens.key_provider)
+    orchestrator.bind(app)
     # https: the refresh cookie is Secure, so the client only sends it back over https
-    with TestClient(create_app(settings), base_url="https://testserver") as c:
+    with TestClient(app, base_url="https://testserver") as c:
         yield c

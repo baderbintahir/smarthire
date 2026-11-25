@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from smarthire_common.auth import StaticKeyProvider, close_auth, init_auth
+from smarthire_common.auth import JWKSClient, KeyProvider, StaticKeyProvider, close_auth, init_auth
 from smarthire_common.background import stop_tasks
 from smarthire_common.db import close_db, init_db
 from smarthire_common.errors import register_exception_handlers
@@ -9,9 +9,11 @@ from smarthire_common.health import db_ping_check, health_router, register_readi
 from smarthire_common.logging import setup_logging
 from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
+from smarthire_common.orchestrator_client import OrchestratorClient
 from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
 from smarthire_common.retention import start_retention
+from smarthire_common.service_auth import close_service_auth, init_service_auth
 from smarthire_common.telemetry import flush_tracing, setup_tracing
 
 from app import maintenance
@@ -20,7 +22,9 @@ from app.config import Settings
 from app.domain.tokens import load_signing_key
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, orchestrator=None,
+               service_key_provider: KeyProvider | None = None) -> FastAPI:
+    """Tests pass a fake orchestrator and the test key of the orchestrator's service tokens."""
     settings = settings or Settings()
     setup_logging(settings.service_name, settings.log_level)
 
@@ -37,6 +41,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         init_db(settings.database_url, pool_size=settings.db_pool_size, max_overflow=settings.db_max_overflow)
         init_redis(settings.redis_url)
+        # Design v2.1: actions run through the orchestrator, which calls back our /internal/* endpoints
+        app.state.orchestrator = orchestrator or OrchestratorClient(settings.orchestrator_url)
+        init_service_auth(service_key_provider or JWKSClient(settings.orchestrator_jwks_url))
         # Identity can't do its job without either: login needs Postgres, and the denylist and
         # login rate limiting (security controls) need Redis
         register_readiness_check("database", db_ping_check)
@@ -47,6 +54,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
+        await close_service_auth()
+        if orchestrator is None:
+            await app.state.orchestrator.aclose()
         await close_auth()
         await close_redis()
         await close_db()

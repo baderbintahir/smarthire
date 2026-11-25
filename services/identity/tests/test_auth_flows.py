@@ -2,12 +2,14 @@
 
 import hashlib
 import time
+import uuid
 
 import jwt
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from app.services.registration import register_user
+from app.domain.passwords import hash_password
+from app.services.registration import create_user
 from tests.conftest import run
 
 COOKIE = "refresh_token"
@@ -63,29 +65,51 @@ def test_register_recruiter_with_company(client):
     assert (r.json()["full_name"], r.json()["current_company"], r.json()["roles"]) == ("Rita", "[Company A]", ["RECRUITER"])
 
 
-def test_register_with_two_roles(client, settings):
+def test_register_with_two_roles(client, orchestrator):
     r = register(client, "both@example.com", roles=["RECRUITER", "CANDIDATE"])
     assert r.status_code == 201 and r.json()["roles"] == ["CANDIDATE", "RECRUITER"]  # stable order (role id)
-    event = fetch_one(settings.database_url, "SELECT payload FROM outbox")[0]
-    # roles in the order given; `role` is the deprecated v1 field (= first role)
-    assert event["payload"] == {"user_id": r.json()["id"], "role": "RECRUITER", "roles": ["RECRUITER", "CANDIDATE"]}
+    [action] = orchestrator.inputs("register")
+    assert action["user"]["roles"] == ["CANDIDATE", "RECRUITER"]
     claims = jwt.decode(login(client, "both@example.com").json()["access_token"], options={"verify_signature": False})
     assert claims["roles"] == ["CANDIDATE", "RECRUITER"] and claims["name"] == "Ana Example"
 
 
-def test_registration_writes_user_registered_to_the_outbox(client, settings):
-    user_id = register(client).json()["id"]
-    topic, key, event = fetch_one(settings.database_url, "SELECT topic, message_key, payload FROM outbox")
-    assert (topic, key) == ("identity.users", user_id)  # keyed by user: one user's events stay in order
-    assert event["event_type"] == "UserRegistered" and event["producer"] == "identity"
-    assert event["payload"] == {"user_id": user_id, "role": "CANDIDATE", "roles": ["CANDIDATE"]}  # no email or name
+def test_registration_runs_the_register_action(client, orchestrator):
+    """Design v2.1: the orchestrator's RegistrationWorkflow creates the user (its commit step is our own
+    POST /internal/users). The workflow id never contains the email; the password never leaves as text."""
+    import hashlib
+
+    user_id = register(client, "ana@example.com").json()["id"]
+    [(action, key, payload)] = orchestrator.actions
+    assert action == "register" and key == {"email_hash": hashlib.sha256(b"ana@example.com").hexdigest()}
+    assert payload["user"]["id"] == user_id and payload["user"]["password_hash"].startswith("$argon2id$")
+    assert "password" not in payload["user"]
 
 
-def test_failed_registration_writes_no_event(client, settings):
+def test_duplicate_email_is_refused_before_any_action(client, orchestrator):
     register(client, "ana@example.com")
     assert register(client, "ANA@example.com").status_code == 409
-    count = fetch_one(settings.database_url, "SELECT count(*) FROM outbox")[0]
-    assert count == 1  # the duplicate's event rolled back with it
+    assert len(orchestrator.actions) == 1  # the duplicate never started a workflow
+
+
+def test_orchestrator_down_means_503_and_no_user(client, orchestrator, settings):
+    orchestrator.down = True
+    r = register(client, "ana@example.com")
+    assert r.status_code == 503 and r.json()["error"]["code"] == "WORKFLOWS_UNAVAILABLE"
+    assert fetch_one(settings.database_url, "SELECT count(*) FROM users")[0] == 0
+
+
+def test_create_user_step_is_safe_to_repeat(client, service_tokens, settings):
+    """Temporal may run the commit step again after a timeout: same id -> same user, no second row."""
+    user = {"id": "0190a0a0-0000-7000-8000-000000000001", "email": "rep@example.com",
+            "password_hash": "$argon2id$x", "full_name": "Rep", "roles": ["CANDIDATE"]}
+    first = client.post("/internal/users", json=user, headers=service_tokens.headers())
+    again = client.post("/internal/users", json=user, headers=service_tokens.headers())
+    assert first.status_code == again.status_code == 200 and first.json() == again.json()
+    other = client.post("/internal/users", json={**user, "id": "0190a0a0-0000-7000-8000-000000000002"},
+                        headers=service_tokens.headers())
+    assert other.status_code == 409  # another user with the same email
+    assert client.post("/internal/users", json=user).status_code == 401  # orchestrator only
 
 
 def test_register_validation(client):
@@ -296,7 +320,8 @@ def _create_admin(settings, email="admin@example.com"):
     async def go():
         engine = create_async_engine(settings.database_url)
         async with AsyncSession(engine) as session:
-            await register_user(session, email=email, password="correct-horse", full_name="Admin", roles=["ADMIN"])
+            await create_user(session, id=uuid.uuid4(), email=email, password_hash=hash_password("correct-horse"),
+                              full_name="Admin", current_company=None, roles=["ADMIN"])
         await engine.dispose()
 
     run(go())

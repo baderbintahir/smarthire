@@ -9,7 +9,8 @@ Answer -> what Temporal does:
     5xx, 408, 429, no answer    retried with the step's retry policy (the service is down or busy)
 
 Every call carries a fresh service token and an Idempotency-Key that stays the same across retries of
-the same step (workflow id + activity id), so the endpoint can return its first answer again."""
+the same step (workflow id + run id + activity id; the run id because a workflow id can be used again
+later, e.g. grant, revoke, grant the same role), so the endpoint can return its first answer again."""
 
 from dataclasses import dataclass
 
@@ -39,7 +40,8 @@ class ServiceSteps:
     @activity.defn(name="call_service")
     async def call_service(self, call: ServiceCall) -> dict:
         info = activity.info()
-        headers = {**self._signer.headers(), "Idempotency-Key": f"{info.workflow_id}:{info.activity_id}"}
+        key = f"{info.workflow_id}:{info.workflow_run_id}:{info.activity_id}"
+        headers = {**self._signer.headers(), "Idempotency-Key": key}
         try:
             response = await self._http.request(call.method, self._urls[call.service] + call.path, json=call.body,
                                                 headers=headers, timeout=call.timeout_seconds)

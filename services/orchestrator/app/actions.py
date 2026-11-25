@@ -14,4 +14,9 @@ class Action:
     workflow_id: Callable[[dict], str]  # from the request's "key"
 
 
-ACTIONS: dict[str, Action] = {}  # filled flow by flow (Steps T5-T9)
+ACTIONS: dict[str, Action] = {
+    # Identity (W1, W2)
+    "register": Action("RegistrationWorkflow", lambda k: f"register-{k['email_hash']}"),
+    "grant-role": Action("RoleChangeWorkflow", lambda k: f"role-{k['user_id']}-{k['role']}-grant"),
+    "revoke-role": Action("RoleChangeWorkflow", lambda k: f"role-{k['user_id']}-{k['role']}-revoke"),
+}

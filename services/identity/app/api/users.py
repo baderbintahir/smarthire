@@ -7,7 +7,7 @@ from smarthire_common.redis import get_redis
 from smarthire_common.errors import NotFoundError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import CurrentUser, get_current_user, get_settings, require_role
+from app.api.deps import CurrentUser, get_current_user, get_orchestrator, get_settings, require_role
 from app.config import Settings
 from app.models import User
 from app.repositories import users as users_repo
@@ -45,19 +45,20 @@ async def me(user: CurrentUser = Depends(get_current_user), session: AsyncSessio
 async def update_me(
     body: ProfileUpdate, user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)
 ):
-    """Change my name and/or current employer. Emits UserProfileUpdated. The token's `name` claim
-    updates on the next refresh."""
+    """Change my name and/or current employer (a plain write: no other service reacts). The token's
+    `name` claim updates on the next refresh."""
     changes = body.model_dump(include=body.model_fields_set)  # only what the client sent
     return await _user_out(session, await accounts.update_profile(session, user.user_id, changes))
 
 
 @router.post("/me/roles", status_code=status.HTTP_201_CREATED, response_model=UserOut)
 async def add_my_role(
-    body: SelfRoleRequest, user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session)
+    body: SelfRoleRequest, user: CurrentUser = Depends(get_current_user), session: AsyncSession = Depends(get_session),
+    orchestrator=Depends(get_orchestrator),
 ):
     """Give myself CANDIDATE or RECRUITER (never ADMIN). 409 if I already hold it. Refresh to get
-    a token that carries the new role."""
-    return await _user_out(session, await accounts.grant_role(session, user.user_id, body.role, granted_by=None))
+    a token that carries the new role. Design v2.1: RoleChangeWorkflow (profile + fact follow)."""
+    return await accounts.grant_role(session, orchestrator, user.user_id, body.role, granted_by=None)
 
 
 @router.post("/{user_id}/roles", status_code=status.HTTP_201_CREATED, response_model=UserOut)
@@ -66,9 +67,10 @@ async def grant_role(
     body: AdminRoleRequest,
     current: CurrentUser = Depends(require_role("ADMIN")),
     session: AsyncSession = Depends(get_session),
+    orchestrator=Depends(get_orchestrator),
 ):
     """Admin: grant any role, ADMIN included."""
-    return await _user_out(session, await accounts.grant_role(session, user_id, body.role, granted_by=current.user_id))
+    return await accounts.grant_role(session, orchestrator, user_id, body.role, granted_by=current.user_id)
 
 
 @router.delete("/{user_id}/roles/{role}", status_code=status.HTTP_204_NO_CONTENT)
@@ -77,13 +79,10 @@ async def revoke_role(
     role: AnyRole,
     current: CurrentUser = Depends(require_role("ADMIN")),
     session: AsyncSession = Depends(get_session),
-    redis: Redis = Depends(get_redis),
-    settings: Settings = Depends(get_settings),
+    orchestrator=Depends(get_orchestrator),
 ):
     """Admin: take a role away. The user's current tokens stop working everywhere (they still list the role)."""
-    await accounts.revoke_role(
-        session, redis, user_id, role, revoked_by=current.user_id, ttl_seconds=settings.access_token_ttl_seconds
-    )
+    await accounts.revoke_role(session, orchestrator, user_id, role, revoked_by=current.user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

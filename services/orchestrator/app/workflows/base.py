@@ -38,6 +38,21 @@ async def call(step: str, service: str, method: str, path: str, body: dict | Non
     )
 
 
+async def record_fact(kind: str, data: dict) -> None:
+    """Hand Analytics a fact (design v2.0). The fact id is this workflow RUN + the kind, so a retried step
+    is stored once, and a later run of the same workflow id (e.g. the same role granted again) counts again."""
+    info = workflow.info()
+    await call(f"record_fact {kind}", "analytics", "POST", "/internal/facts",
+               {"fact_id": f"{info.workflow_id}:{info.run_id}:{kind}", "kind": kind,
+                "occurred_at": workflow.now().isoformat(), "data": data})
+
+
+def rejected(status: int, code: str, message: str, details=None) -> ApplicationError:
+    """A business "no" decided by the workflow itself, answered to the caller like a service's 4xx."""
+    return ApplicationError(message, {"status": status, "code": code, "message": message, "details": details},
+                            type=BUSINESS_ERROR, non_retryable=True)
+
+
 def business_error(err: BaseException) -> ApplicationError | None:
     """The 4xx answer behind a failed step, or None if the step failed for another reason."""
     cause = err.cause if isinstance(err, ActivityError) else err

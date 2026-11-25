@@ -12,16 +12,21 @@ import sys
 from smarthire_common.db import close_db, init_db, session_scope
 
 from app.config import Settings
-from app.services.registration import register_user
+from smarthire_common.models import new_id
+
+from app.domain.passwords import hash_password
+from app.services.registration import create_user
 
 
 async def create_admin(email: str, password: str) -> None:
     init_db(Settings().database_url)
     try:
         async with session_scope() as session:
-            # The admin's display name defaults to the email's local part; change it with PATCH /users/me
-            user, _ = await register_user(session, email=email, password=password,
-                                          full_name=email.split("@")[0], roles=["ADMIN"])
+            # The admin's display name defaults to the email's local part; change it with PATCH /users/me.
+            # Straight to the commit step, no workflow: nothing reacts to a new admin (no profile, no count)
+            user, _ = await create_user(session, id=new_id(), email=email.strip().lower(),
+                                        password_hash=hash_password(password), full_name=email.split("@")[0],
+                                        current_company=None, roles=["ADMIN"])
         print(f"Created ADMIN {user.email} ({user.id})")
     finally:
         await close_db()

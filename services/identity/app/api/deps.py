@@ -28,6 +28,11 @@ def get_signing_key(request: Request) -> SigningKey:
     return request.app.state.signing_key
 
 
+def get_orchestrator(request: Request):
+    """The client that starts actions (design v2.1); tests put a fake one in app.state."""
+    return request.app.state.orchestrator
+
+
 def get_login_rate_limiter(
     redis: Redis = Depends(get_redis), settings: Settings = Depends(get_settings)
 ) -> LoginRateLimiter:

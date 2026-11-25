@@ -217,3 +217,47 @@ class ServiceTokenFactory:
         import uuid
 
         return {**self.signer.headers(), "Idempotency-Key": idempotency_key or f"test-{uuid.uuid4()}"}
+
+
+class FakeOrchestrator:
+    """Stands in for the orchestrator in a service's tests (design v2.1). It records every action and runs
+    ONLY its commit step, by calling the service's own internal endpoint in-process with a valid service
+    token: the commit endpoint is tested for real, follow-ups are not (the orchestrator's tests cover them).
+
+        fake = FakeOrchestrator(service_tokens, {"register": lambda i: ("POST", "/internal/users", i["user"])})
+        app = create_app(settings, orchestrator=fake, service_key_provider=service_tokens.key_provider)
+        fake.bind(app)
+        fake.down = True   # -> 503 WORKFLOWS_UNAVAILABLE, nothing written
+    """
+
+    def __init__(self, service_tokens: "ServiceTokenFactory", commits: dict) -> None:
+        self._tokens, self._commits = service_tokens, commits
+        self._app = None
+        self.actions: list[tuple[str, dict, dict]] = []  # (action, key, input)
+        self.down = False
+
+    def bind(self, app) -> None:
+        self._app = app
+
+    def inputs(self, action: str) -> list[dict]:
+        return [i for a, _, i in self.actions if a == action]
+
+    async def run_action(self, action: str, *, key: dict, input: dict) -> dict:
+        import httpx
+
+        from smarthire_common.errors import AppError, WorkflowsUnavailableError
+
+        if self.down:
+            raise WorkflowsUnavailableError()
+        self.actions.append((action, key, input))
+        method, path, body = self._commits[action](input)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self._app), base_url="http://service") as client:
+            response = await client.request(method, path, json=body, headers=self._tokens.headers())
+        if response.is_success:
+            return response.json() if response.content else {}
+        error = response.json()["error"]
+        raise AppError(error["message"], code=error["code"], http_status=response.status_code,
+                       details=error.get("details"))
+
+    async def aclose(self) -> None:
+        pass
