@@ -86,8 +86,13 @@ def candidates():
     return FakeCandidates()
 
 
+@pytest.fixture(scope="session")
+def service_tokens():
+    return testing.ServiceTokenFactory()  # the orchestrator's tokens for /internal/*
+
+
 @pytest.fixture
-def client(migrated, database_url, redis_url, tokens, candidates):
+def client(migrated, database_url, redis_url, tokens, candidates, service_tokens):
     from fastapi.testclient import TestClient
 
     from app.config import Settings
@@ -97,5 +102,6 @@ def client(migrated, database_url, redis_url, tokens, candidates):
     testing.run(testing.flush_redis(redis_url))
     settings = Settings(database_url=database_url, redis_url=redis_url, max_active_applications=MAX_ACTIVE,
                         kafka_enabled=False, temporal_enabled=False, _env_file=None)
-    with TestClient(create_app(settings, key_provider=tokens.key_provider, candidate_client=candidates)) as c:
+    with TestClient(create_app(settings, key_provider=tokens.key_provider, candidate_client=candidates,
+                               service_key_provider=service_tokens.key_provider)) as c:
         yield c

@@ -198,26 +198,22 @@ async def test_record_keeps_a_stage_the_recruiter_already_chose(database):
 # ---------- 10.5 job closed + the starter ----------
 
 
-async def test_job_closed_closes_submitted_applications_frees_quota_and_signals(database, monkeypatch):
-    signals = []
+async def test_job_closed_closes_submitted_applications_and_frees_quota(database):
+    """close_job_applications step (design v2.1): returns the closed ones, whose workflows the orchestrator stops."""
+    from app.services import replica
 
-    async def fake_signal(settings, application_id, name):
-        signals.append((application_id, name))
-
-    monkeypatch.setattr(workflows, "signal", fake_signal)
     open_one = await submitted()
     [(job_id,)] = await fetch("SELECT job_id FROM applications")
     in_progress = await submitted(status="IN_PROGRESS", stage="Interview", job_id=job_id)
-    event = new_event("JobClosed", producer="job", payload={"job_id": str(job_id), "recruiter_id": str(uuid.uuid4()), "version": 2})
     async with db.session_scope() as s:
-        await handlers.build_handlers(None)["JobClosed"](s, event)
+        closed = await replica.close_job(s, job_id, 2)
 
     statuses = dict(await fetch("SELECT id::text, status FROM applications"))
     assert statuses == {open_one: "CLOSED", in_progress: "IN_PROGRESS"}  # the recruiter's work continues
     quotas = sorted(r[0] for r in await fetch("SELECT active_count FROM application_quotas"))
     assert quotas == [0, 1]  # the closed one's slot is free again
     assert (await fetch("SELECT status FROM job_replica"))[0][0] == "CLOSED"
-    assert signals == [(open_one, "job_closed")]
+    assert [c["application_id"] for c in closed] == [open_one]
 
 
 async def test_application_submitted_starts_the_workflow(monkeypatch):

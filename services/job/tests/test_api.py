@@ -208,70 +208,63 @@ def test_ready_checks_database_and_redis(client):
     assert client.get("/health/ready").json()["checks"] == {"database": "ok", "redis": "ok"}
 
 
-# ---------- events (Step 7.7): written to the outbox in the same transaction ----------
+# ---------- design v2.1: publishing, re-publishing and closing run through the orchestrator ----------
 
 
-def outbox(database_url: str) -> list[dict]:
-    async def go():
-        engine = create_async_engine(database_url)
-        async with engine.connect() as conn:
-            rows = (await conn.execute(text("SELECT message_key, payload FROM outbox ORDER BY id"))).all()
-        await engine.dispose()
-        return [{"key": key, **envelope} for key, envelope in rows]
-
-    return testing.run(go())
-
-
-def test_edit_writes_job_updated_with_a_full_snapshot(client, recruiter, database_url):
+def test_a_draft_edit_is_a_plain_write(client, recruiter, orchestrator):
     job = create(client, recruiter[1])
-    assert outbox(database_url) == []  # creating a draft tells nobody: drafts are private
-    client.put(f"/jobs/{job['id']}", json=job_body(title="Senior Backend Engineer", version=1), headers=recruiter[1])
-    [event] = outbox(database_url)
-    assert event["key"] == job["id"] and event["event_type"] == "JobUpdated" and event["producer"] == "job"
-    assert event["payload"] == {
-        "job_id": job["id"], "recruiter_id": str(recruiter[0]), "title": "Senior Backend Engineer",
-        "status": "DRAFT", "stages": ["Screening", "Interview", "Offer"],
-        "eligibility_rules": {"min_experience_years": 2}, "application_limit": 100, "deadline": None,
-        "version": 2,
-    }
+    r = client.put(f"/jobs/{job['id']}", json=job_body(title="Senior Backend Engineer", version=1), headers=recruiter[1])
+    assert r.status_code == 200 and r.json()["version"] == 2
+    assert orchestrator.actions == []  # drafts are private: nobody else reacts, no workflow
 
 
-def test_rejected_edit_writes_no_event(client, recruiter, database_url):
+def test_publish_runs_the_publish_job_action(client, recruiter, orchestrator):
     job = create(client, recruiter[1])
-    client.put(f"/jobs/{job['id']}", json=job_body(version=1), headers=recruiter[1])
-    assert client.put(f"/jobs/{job['id']}", json=job_body(version=1), headers=recruiter[1]).status_code == 409
-    assert len(outbox(database_url)) == 1  # the stale save rolled back, its event with it
+    r = client.post(f"/jobs/{job['id']}/publish", headers=recruiter[1])
+    assert r.status_code == 202 and r.json() == {"id": job["id"], "status": "PROCESSING"}
+    [(action, key, payload)] = orchestrator.actions
+    assert action == "publish-job" and key == {"job_id": job["id"], "version": 1}
+    assert payload == {"job_id": job["id"], "expected_version": 1}
+    assert client.get(f"/jobs/{job['id']}", headers=recruiter[1]).json()["version"] == 2  # PROCESSING bumped it
 
 
-def test_close_writes_job_closed_and_versions_only_grow(client, recruiter, database_url):
-    job = create(client, recruiter[1])
-    client.put(f"/jobs/{job['id']}", json=job_body(version=1), headers=recruiter[1])  # v2
-    client.post(f"/jobs/{job['id']}/publish", headers=recruiter[1])  # v3 + JobPublishRequested
-    force_status(database_url, job["id"], "READY")
-    closed = client.post(f"/jobs/{job['id']}/close", headers=recruiter[1]).json()  # v4
-    events = outbox(database_url)
-    assert [e["event_type"] for e in events] == ["JobUpdated", "JobPublishRequested", "JobClosed"]
-    assert events[2]["payload"] == {"job_id": job["id"], "recruiter_id": str(recruiter[0]), "version": 4}
-    assert closed["version"] == 4
-    # Every change has a higher version, so a consumer can drop anything older than what it has
-    versions = [e["payload"]["version"] for e in events]
-    assert versions == sorted(versions) and len(set(versions)) == len(versions)
-
-
-# ---------- Step 9.5: publishing is requested through the outbox ----------
-
-
-def test_publish_requests_the_workflow_in_the_same_transaction(client, recruiter, database_url):
-    job = create(client, recruiter[1])
-    published = client.post(f"/jobs/{job['id']}/publish", headers=recruiter[1]).json()
-    [event] = outbox(database_url)
-    assert event["key"] == job["id"] and event["event_type"] == "JobPublishRequested"
-    assert event["payload"] == {"job_id": job["id"], "version": 2}  # the version the workflow will process
-    assert published["status"] == "PROCESSING"
-
-
-def test_editing_a_ready_job_requests_publishing_again(client, recruiter, database_url):
+def test_editing_a_ready_job_runs_edit_ready_job(client, recruiter, orchestrator, database_url):
     job = create(client, recruiter[1])
     force_status(database_url, job["id"], "READY")
-    client.put(f"/jobs/{job['id']}", json=job_body(title="Changed title", version=1), headers=recruiter[1])
-    assert [e["event_type"] for e in outbox(database_url)] == ["JobUpdated", "JobPublishRequested"]
+    r = client.put(f"/jobs/{job['id']}", json=job_body(title="Changed title", version=1), headers=recruiter[1])
+    assert r.status_code == 200
+    assert (r.json()["status"], r.json()["title"], r.json()["version"]) == ("PROCESSING", "Changed title", 2)
+    [(action, key, _)] = orchestrator.actions
+    assert action == "edit-ready-job" and key == {"job_id": job["id"], "version": 1}
+
+
+def test_close_runs_close_job(client, recruiter, orchestrator, database_url):
+    job = create(client, recruiter[1])
+    force_status(database_url, job["id"], "READY")
+    r = client.post(f"/jobs/{job['id']}/close", headers=recruiter[1])
+    assert r.status_code == 200 and r.json()["status"] == "CLOSED"
+    assert [a for a, _, _ in orchestrator.actions] == ["close-job"]
+
+
+def test_orchestrator_down_means_503_and_no_change(client, recruiter, orchestrator):
+    job = create(client, recruiter[1])
+    orchestrator.down = True
+    r = client.post(f"/jobs/{job['id']}/publish", headers=recruiter[1])
+    assert r.status_code == 503 and r.json()["error"]["code"] == "WORKFLOWS_UNAVAILABLE"
+    assert client.get(f"/jobs/{job['id']}", headers=recruiter[1]).json()["status"] == "DRAFT"
+
+
+def test_publishing_steps_are_safe_to_repeat(client, recruiter, service_tokens):
+    job = create(client, recruiter[1])
+    step = lambda path, body: client.post(f"/internal/jobs/{job['id']}/{path}", json=body,  # noqa: E731
+                                          headers=service_tokens.headers())
+    first = step("processing", {"expected_version": 1})
+    again = step("processing", {"expected_version": 1})  # a retried step
+    assert first.status_code == again.status_code == 200 and first.json() == again.json()
+    assert first.json()["status"] == "PROCESSING" and first.json()["description"]  # enrichment gets the text
+    ready = step("ready", {"version": 2})
+    assert ready.status_code == 200 and (ready.json()["status"], ready.json()["version"]) == ("READY", 3)
+    assert step("ready", {"version": 2}).json() == ready.json()  # repeated: same answer
+    stale = step("failed", {"version": 2})  # a run for a version that is no longer current
+    assert stale.status_code == 409 and stale.json()["error"]["code"] == "STALE_JOB_VERSION"
+    assert client.post(f"/internal/jobs/{job['id']}/ready", json={"version": 2}).status_code == 401

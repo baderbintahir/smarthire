@@ -13,11 +13,12 @@ from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
 from smarthire_common.retention import start_retention
+from smarthire_common.service_auth import close_service_auth, init_service_auth
 from smarthire_common.telemetry import flush_tracing, setup_tracing
 from smarthire_common.temporal import start_worker
 
 from app import maintenance
-from app.api import applications
+from app.api import applications, internal
 from app.config import Settings
 from app.events import handlers
 from app.repositories.candidate_api import CandidateClient, HttpCandidateClient
@@ -30,8 +31,10 @@ def create_app(
     *,
     key_provider: KeyProvider | None = None,
     candidate_client: CandidateClient | None = None,
+    service_key_provider: KeyProvider | None = None,
 ) -> FastAPI:
-    """key_provider and candidate_client let tests replace Identity's JWKS and the Candidate API."""
+    """key_provider, service_key_provider and candidate_client let tests replace Identity's JWKS, the
+    orchestrator's JWKS and the Candidate API."""
     settings = settings or Settings()
     setup_logging(settings.service_name, settings.log_level)
 
@@ -45,9 +48,11 @@ def create_app(
             audience=settings.jwt_audience,
         )
         app.state.candidates = candidate_client or HttpCandidateClient(settings.candidate_url)
+        # The orchestrator's workflow steps call /internal/* with its service token (design v2.1)
+        init_service_auth(service_key_provider or JWKSClient(settings.orchestrator_jwks_url))
         register_readiness_check("database", db_ping_check)
         register_readiness_check("redis", redis_ping_check)
-        # Publish our events and keep job_replica fresh from Job's. Kafka (and Candidate) are not
+        # Publish our events (ApplicationSubmitted starts the workflow, until Step T9). Kafka (and Candidate) are not
         # readiness checks: everything except applying keeps working without them
         tasks = []
         if settings.kafka_enabled:
@@ -63,6 +68,7 @@ def create_app(
         yield
         await stop_tasks(*tasks)
         await app.state.candidates.close()
+        await close_service_auth()
         await close_auth()
         await close_redis()
         await close_db()
@@ -76,4 +82,5 @@ def create_app(
     app.include_router(health_router)
     setup_metrics(app)  # GET /metrics + request count/latency
     app.include_router(applications.router)
+    app.include_router(internal.router)
     return app

@@ -4,7 +4,7 @@ case, shape the response. Rules live in app/domain, orchestration in app/service
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from smarthire_common.auth import CurrentUser, get_optional_user, require_role
 from smarthire_common.db import get_session
 from smarthire_common.errors import ForbiddenError, UnauthorizedError
@@ -65,18 +65,21 @@ async def get_job(
 
 @router.put("/{job_id}", response_model=JobOut)
 async def update_job(
-    job_id: uuid.UUID, body: JobUpdate, user: CurrentUser = Depends(recruiter), session: AsyncSession = Depends(get_session)
+    job_id: uuid.UUID, body: JobUpdate, request: Request, user: CurrentUser = Depends(recruiter),
+    session: AsyncSession = Depends(get_session),
 ):
-    return to_out(*await service.update_job(session, user, job_id, body))
+    return to_out(*await service.update_job(session, request.app.state.orchestrator, user, job_id, body))
 
 
 @router.post("/{job_id}/publish", status_code=status.HTTP_202_ACCEPTED, response_model=PublishAccepted)
-async def publish_job(job_id: uuid.UUID, user: CurrentUser = Depends(recruiter), session: AsyncSession = Depends(get_session)):
+async def publish_job(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(recruiter),
+                      session: AsyncSession = Depends(get_session)):
     # 202 Accepted: the work (enrichment, Phase 9) happens after we answer
-    job = await service.publish_job(session, user, job_id)
-    return PublishAccepted(id=job.id, status=job.status)
+    job = await service.publish_job(session, request.app.state.orchestrator, user, job_id)
+    return PublishAccepted(id=job["job_id"], status=job["status"])
 
 
 @router.post("/{job_id}/close", response_model=JobOut)
-async def close_job(job_id: uuid.UUID, user: CurrentUser = Depends(recruiter), session: AsyncSession = Depends(get_session)):
-    return to_out(*await service.close_job(session, user, job_id))
+async def close_job(job_id: uuid.UUID, request: Request, user: CurrentUser = Depends(recruiter),
+                    session: AsyncSession = Depends(get_session)):
+    return to_out(*await service.close_job(session, request.app.state.orchestrator, user, job_id))

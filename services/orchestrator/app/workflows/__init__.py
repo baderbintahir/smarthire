@@ -3,5 +3,7 @@
 from app.workflows.candidate import ResumeProcessingWorkflow
 from app.workflows.email import SendEmailWorkflow
 from app.workflows.identity import RegistrationWorkflow, RoleChangeWorkflow
+from app.workflows.job import JobClosingWorkflow, JobPublishingWorkflow
 
-WORKFLOWS: list = [SendEmailWorkflow, RegistrationWorkflow, RoleChangeWorkflow, ResumeProcessingWorkflow]
+WORKFLOWS: list = [SendEmailWorkflow, RegistrationWorkflow, RoleChangeWorkflow, ResumeProcessingWorkflow,
+                   JobPublishingWorkflow, JobClosingWorkflow]

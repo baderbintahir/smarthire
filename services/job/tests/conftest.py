@@ -48,8 +48,29 @@ def tokens():
     return testing.TokenFactory()
 
 
+@pytest.fixture(scope="session")
+def service_tokens():
+    return testing.ServiceTokenFactory()  # the orchestrator's tokens for /internal/*
+
+
+# The commit step of each action, exactly as the orchestrator's workflows call it (design v2.1)
+COMMITS = {
+    "publish-job": lambda i: ("POST", f"/internal/jobs/{i['job_id']}/processing",
+                              {"expected_version": i["expected_version"]}),
+    "edit-ready-job": lambda i: ("POST", f"/internal/jobs/{i['job_id']}/processing",
+                                 {"expected_version": i["expected_version"], "content": i["content"],
+                                  "stages": i["stages"]}),
+    "close-job": lambda i: ("POST", f"/internal/jobs/{i['job_id']}/close", {"expected_version": i["expected_version"]}),
+}
+
+
 @pytest.fixture
-def client(migrated, database_url, redis_url, tokens):
+def orchestrator(service_tokens):
+    return testing.FakeOrchestrator(service_tokens, COMMITS)
+
+
+@pytest.fixture
+def client(migrated, database_url, redis_url, tokens, service_tokens, orchestrator):
     from fastapi.testclient import TestClient
 
     from app.config import Settings
@@ -60,5 +81,8 @@ def client(migrated, database_url, redis_url, tokens):
     # kafka_enabled=False: no Kafka in unit tests; events stay in the outbox, where tests read them
     settings = Settings(database_url=database_url, redis_url=redis_url, kafka_enabled=False,
                         temporal_enabled=False, _env_file=None)
-    with TestClient(create_app(settings, key_provider=tokens.key_provider)) as c:
+    app = create_app(settings, key_provider=tokens.key_provider, service_key_provider=service_tokens.key_provider,
+                     orchestrator=orchestrator)
+    orchestrator.bind(app)
+    with TestClient(app) as c:
         yield c

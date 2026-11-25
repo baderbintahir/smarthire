@@ -22,14 +22,17 @@ scrape_configs:
       - { names: [notification], type: A, port: 8007 }
       - { names: [analytics], type: A, port: 8008 }
       - { names: [bff_web], type: A, port: 8011 }
+      - { names: [orchestrator], type: A, port: 8012 }   # design v2.1: 2 replicas, both scraped
+      - { names: [candidate-parser], type: A, port: 8004 }
     relabel_configs: &service_label        # the name looked up -> service="application" (dashboards group by it)
       - source_labels: [__meta_dns_name]
         target_label: service
 
   - job_name: temporal-workers             # the Temporal SDK's own metrics (chassis temporal.py, :9464)
+    # Design v2.1: the orchestrator runs every workflow; application and scoring keep their workers until
+    # Step T9 moves them, then only the orchestrator is left here
     dns_sd_configs:
-      - { names: [job], type: A, port: 9464 }
-      - { names: [job_enrichment], type: A, port: 9464 }
+      - { names: [orchestrator], type: A, port: 9464 }
       - { names: [application], type: A, port: 9464 }
       - { names: [scoring], type: A, port: 9464 }
     relabel_configs: *service_label

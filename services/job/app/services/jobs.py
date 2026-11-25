@@ -6,12 +6,10 @@ import uuid
 
 from smarthire_common.auth import CurrentUser
 from smarthire_common.errors import ForbiddenError
-from smarthire_common.events import new_event
-from smarthire_common.outbox import add_outbox_event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain import job as rules
-from app.domain.errors import JobNotFoundError, JobTransitionError, JobVersionConflictError
+from app.domain.errors import JobNotFoundError, JobVersionConflictError
 from app.domain.job import JobStatus
 from app.models import Job, JobStage
 from app.repositories import jobs as jobs_repo
@@ -36,13 +34,6 @@ async def _with_stages(session: AsyncSession, job: Job) -> tuple[Job, list[JobSt
     return job, (await jobs_repo.stages_for(session, [job.id]))[job.id]
 
 
-async def publish_event(session: AsyncSession, event_type: str, job: Job, payload: dict) -> None:
-    """Queue an event about this job in the current transaction. Key = job id: all of one job's
-    events land in the same partition, so consumers see them in order."""
-    event = new_event(event_type, producer="job", payload=payload)
-    await add_outbox_event(session, event, key=str(job.id))
-
-
 def snapshot(job: Job, stages: list[JobStage]) -> dict:
     """The full job as other services need it (Application's job_replica, Phase 8). A full
     snapshot, not just "what changed": a consumer can upsert it without knowing earlier events."""
@@ -57,14 +48,6 @@ def snapshot(job: Job, stages: list[JobStage]) -> dict:
         "deadline": job.deadline.isoformat() if job.deadline else None,
         "version": job.version,
     }
-
-
-async def request_publishing(session: AsyncSession, job: Job) -> None:
-    """Ask for JobPublishingWorkflow to run for this job version, via the outbox, in the SAME
-    transaction as the change to PROCESSING. Job's own consumer then starts the workflow with id
-    publish-{job_id}-{version} (app/events/handlers.py). Starting it straight from this request
-    would be a dual write: PROCESSING committed but no workflow (or the reverse) after a crash."""
-    await publish_event(session, "JobPublishRequested", job, {"job_id": str(job.id), "version": job.version})
 
 
 async def _load_owned(session: AsyncSession, job_id: uuid.UUID, user: CurrentUser) -> Job:
@@ -120,47 +103,57 @@ async def list_mine(session: AsyncSession, user: CurrentUser, *, status: str | N
 
 
 async def update_job(
-    session: AsyncSession, user: CurrentUser, job_id: uuid.UUID, data: JobUpdate
+    session: AsyncSession, orchestrator, user: CurrentUser, job_id: uuid.UUID, data: JobUpdate
 ) -> tuple[Job, list[JobStage]]:
     job = await _load_owned(session, job_id, user)
     new_status = rules.status_after_edit(job.status)  # READY -> PROCESSING: content must be re-processed
     stages = rules.normalize_stages(data.stages)
+    if new_status == JobStatus.PROCESSING:
+        # A published job: others (Application's replica, the structured job) must follow the edit, so it
+        # runs as JobPublishingWorkflow (design v2.1). Its commit step saves the edit (publishing.start_processing)
+        await session.rollback()  # hold no transaction while the orchestrator calls us back
+        await orchestrator.run_action(
+            "edit-ready-job", key={"job_id": str(job_id), "version": data.version},
+            input={"job_id": str(job_id), "expected_version": data.version,
+                   "content": jsonable_content(data), "stages": stages})
+        return await _with_stages(session, await jobs_repo.get(session, job_id))
+    # A draft (or a failed publish): nobody else knows it yet, so a plain write
     # The check and the write are ONE statement: between our read above and this UPDATE, another
     # recruiter could have saved; the version condition catches that
     if not await jobs_repo.update_if_version(session, job_id, data.version, status=new_status, **_content(data)):
         raise JobVersionConflictError()
     await jobs_repo.replace_stages(session, job_id, stages)
-    await session.refresh(job)  # the updated row (new version, status), still inside our transaction
-    job, saved_stages = await _with_stages(session, job)
-    # Same transaction as the update: the event exists if and only if the change does
-    await publish_event(session, "JobUpdated", job, snapshot(job, saved_stages))
-    if job.status == JobStatus.PROCESSING:  # a READY job was edited: its content must be processed again
-        await request_publishing(session, job)
     await session.commit()
-    return job, saved_stages
-
-
-async def publish_job(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID) -> Job:
-    """DRAFT/FAILED -> PROCESSING, and request the publishing workflow (Step 9.5), which takes the
-    job to READY (or FAILED). The caller gets 202 right away: the work happens afterwards."""
-    job = await _load_owned(session, job_id, user)
-    target = rules.publish(job.status)
-    if not await jobs_repo.set_status_if(session, job_id, expected=job.status, new=target):
-        raise JobTransitionError(job.status, target)  # someone changed the status meanwhile
-    await session.refresh(job)  # the new version (every status change bumps it)
-    await request_publishing(session, job)
-    await session.commit()
-    return job
-
-
-async def close_job(session: AsyncSession, user: CurrentUser, job_id: uuid.UUID) -> tuple[Job, list[JobStage]]:
-    job = await _load_owned(session, job_id, user)
-    target = rules.close(job.status)
-    if not await jobs_repo.set_status_if(session, job_id, expected=job.status, new=target):
-        raise JobTransitionError(job.status, target)
     await session.refresh(job)
-    # Application closes the job's open applications when it sees this (Phase 8)
-    await publish_event(session, "JobClosed", job,
-                   {"job_id": str(job.id), "recruiter_id": str(job.recruiter_id), "version": job.version})
-    await session.commit()
     return await _with_stages(session, job)
+
+
+async def publish_job(session: AsyncSession, orchestrator, user: CurrentUser, job_id: uuid.UUID) -> dict:
+    """DRAFT/FAILED -> PROCESSING as the first step of JobPublishingWorkflow (design v2.1), which then
+    takes the job to READY (or FAILED). The caller gets 202 once PROCESSING is committed."""
+    job = await _load_owned(session, job_id, user)
+    rules.publish(job.status)  # friendly 409 without starting anything; checked again in the commit step
+    version = job.version  # read before the rollback: it expires ORM objects (MissingGreenlet otherwise)
+    await session.rollback()
+    return await orchestrator.run_action("publish-job", key={"job_id": str(job_id), "version": version},
+                                         input={"job_id": str(job_id), "expected_version": version})
+
+
+async def close_job(session: AsyncSession, orchestrator, user: CurrentUser,
+                    job_id: uuid.UUID) -> tuple[Job, list[JobStage]]:
+    """READY -> CLOSED as the first step of JobClosingWorkflow, which then closes the job's open
+    applications in Application and stops their workflows."""
+    job = await _load_owned(session, job_id, user)
+    rules.close(job.status)
+    version = job.version  # read before the rollback (it expires ORM objects)
+    await session.rollback()
+    await orchestrator.run_action("close-job", key={"job_id": str(job_id)},
+                                  input={"job_id": str(job_id), "expected_version": version})
+    return await _with_stages(session, await jobs_repo.get(session, job_id))
+
+
+def jsonable_content(data: JobIn) -> dict:
+    """_content as JSON (it travels through the orchestrator to our own commit step)."""
+    content = _content(data)
+    content["deadline"] = content["deadline"].isoformat() if content["deadline"] else None
+    return content

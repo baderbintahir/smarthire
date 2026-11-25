@@ -39,3 +39,13 @@ class JobNotFoundError(NotFoundError):
 
     def __init__(self) -> None:
         super().__init__("Job not found")
+
+
+class StaleJobVersionError(ConflictError):
+    """409 (design v2.1): a publishing step was asked to finish a version that is no longer current
+    (edited or re-published since). The workflow stops quietly: a newer run owns the job now."""
+
+    code = "STALE_JOB_VERSION"
+
+    def __init__(self, job_id, version: int) -> None:
+        super().__init__(f"Job {job_id} is no longer at version {version}")

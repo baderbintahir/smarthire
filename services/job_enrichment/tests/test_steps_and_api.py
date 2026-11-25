@@ -1,22 +1,11 @@
-"""Activities (run in Temporal's ActivityEnvironment, no server needed) and the read API, on a real
-MongoDB. The key property: every activity can run twice without changing the result."""
-
-from temporalio.testing import ActivityEnvironment
+"""The workflow steps (design v2.1: internal endpoints the orchestrator calls) and the read API, on a real
+MongoDB. The key property: every step can run twice without changing the result."""
 
 from app.repositories import structured_jobs
-from app.workflows import activities
+from app.services import enrichment
 from tests.test_domain import DESCRIPTION
 
 JOB = "01a1b2c3-0000-7000-8000-000000000001"
-
-
-async def run(activity_fn, *args):
-    return await ActivityEnvironment().run(activity_fn, *args)
-
-
-async def enriched(version=1) -> dict:
-    extracted = await run(activities.extract_skills, JOB, version, DESCRIPTION, ["python"])
-    return {**extracted, "sections": await run(activities.breakdown_jd, DESCRIPTION)}
 
 
 async def count() -> int:
@@ -25,26 +14,36 @@ async def count() -> int:
     return await get_db()[structured_jobs.COLLECTION].count_documents({})
 
 
-async def test_store_is_an_idempotent_upsert(mongo):
-    data = await enriched()
-    await run(activities.store_structured_job, JOB, 1, data)
-    await run(activities.store_structured_job, JOB, 1, data)  # a Temporal retry
+async def test_build_is_an_idempotent_upsert(mongo):
+    first = await enrichment.build(JOB, 1, DESCRIPTION, ["Python"])
+    assert await enrichment.build(JOB, 1, DESCRIPTION, ["Python"]) == first  # a Temporal retry
     assert await count() == 1  # same _id "<job_id>:<version>": rewritten, not duplicated
     doc = await structured_jobs.latest(JOB)
     assert doc["_id"] == f"{JOB}:1" and doc["skills"][0] == "python" and doc["required_skills"] == ["python"]
+    assert doc["sections"]["benefits"]
 
 
 async def test_versions_are_separate_documents_and_latest_wins(mongo):
-    await run(activities.store_structured_job, JOB, 1, await enriched(1))
-    await run(activities.store_structured_job, JOB, 2, await enriched(2))
+    await enrichment.build(JOB, 1, DESCRIPTION, ["python"])
+    await enrichment.build(JOB, 2, DESCRIPTION, ["python"])
     assert await count() == 2 and (await structured_jobs.latest(JOB))["version"] == 2
 
 
 async def test_compensation_deletes_and_is_safe_to_repeat(mongo):
-    await run(activities.store_structured_job, JOB, 1, await enriched())
-    await run(activities.delete_structured_job, JOB, 1)
-    await run(activities.delete_structured_job, JOB, 1)  # nothing left to delete: still fine
+    await enrichment.build(JOB, 1, DESCRIPTION, ["python"])
+    await enrichment.remove(JOB, 1)
+    await enrichment.remove(JOB, 1)  # nothing left to delete: still fine
     assert await count() == 0
+
+
+def test_internal_endpoints_need_the_orchestrator(client, service_tokens):
+    body = {"job_id": JOB, "version": 7, "description": DESCRIPTION, "required_skills": ["python"]}
+    assert client.post("/internal/structured-jobs", json=body, headers={"Idempotency-Key": "k"}).status_code == 401
+    r = client.post("/internal/structured-jobs", json=body, headers=service_tokens.headers())
+    assert r.status_code == 200 and r.json()["version"] == 7
+    assert client.get(f"/jobs/{JOB}/structured").json()["version"] == 7
+    assert client.delete(f"/internal/structured-jobs/{JOB}/7", headers=service_tokens.headers()).status_code == 204
+    assert client.get(f"/jobs/{JOB}/structured").status_code == 404
 
 
 def test_read_api(client):
@@ -58,7 +57,11 @@ def test_read_api(client):
 
         settings = client.app.state.settings
         mongo = AsyncMongoClient(settings.mongo_url)
-        data = await enriched(3)
+        from app.domain.breakdown import breakdown
+        from app.domain.skills import extract_skills
+
+        data = {"skills": extract_skills(DESCRIPTION, ["python"]), "required_skills": ["python"], "keywords": [],
+                "sections": breakdown(DESCRIPTION)}
         await mongo[settings.mongo_database][structured_jobs.COLLECTION].insert_one(
             {"_id": f"{JOB}:3", "job_id": JOB, "version": 3, **data, "created_at": datetime.now(UTC)})
         await mongo.close()

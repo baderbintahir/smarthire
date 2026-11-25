@@ -44,12 +44,19 @@ async def mongo(settings):
     await close_mongo()
 
 
+@pytest.fixture(scope="session")
+def service_tokens():
+    from smarthire_common import testing
+
+    return testing.ServiceTokenFactory()  # the orchestrator's tokens for /internal/*
+
+
 @pytest.fixture
-def client(settings):
+def client(settings, service_tokens):
     from fastapi.testclient import TestClient
 
     from app.main import create_app
 
     testing.run(_drop(settings.mongo_url))
-    with TestClient(create_app(settings)) as c:
+    with TestClient(create_app(settings, service_key_provider=service_tokens.key_provider)) as c:
         yield c
