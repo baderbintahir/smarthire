@@ -10,13 +10,17 @@ import uuid
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from smarthire_common.db import get_session
+from smarthire_common.db import get_session, session_scope
+from smarthire_common.errors import AppError, NotFoundError
 from smarthire_common.internal import idempotency_key
 from smarthire_common.service_auth import require_orchestrator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.errors import CandidateNotFoundError
 from app.repositories import candidates as repo
+from app.schemas.candidate import ResumeOut
+from app.services import candidates as service
+from app.services import parsing
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 COMMIT_STEP = [Depends(require_orchestrator), Depends(idempotency_key)]
@@ -57,3 +61,33 @@ async def create_profile(candidate_id: uuid.UUID, session: AsyncSession = Depend
     await repo.create_empty(session, candidate_id)
     await session.commit()
     return {"candidate_id": str(candidate_id)}
+
+
+class NewResume(BaseModel):
+    id: uuid.UUID
+    candidate_id: uuid.UUID
+    object_key: str
+    file_name: str
+    content_type: str
+    size_bytes: int
+
+
+@router.post("/resumes", response_model=ResumeOut, dependencies=COMMIT_STEP)
+async def register_resume(body: NewResume, session: AsyncSession = Depends(get_session)):
+    """register_resume step (ResumeProcessingWorkflow's commit): the old resume inactive, this one UPLOADED."""
+    return ResumeOut.model_validate(await service.register_resume(session, body.model_dump(mode="json")))
+
+
+@router.post("/resumes/{resume_id}/parse", dependencies=COMMIT_STEP)
+async def parse_resume(resume_id: uuid.UUID) -> dict:
+    """parse_resume step, served by the candidate-parser container. An unreadable file is a 422: retrying
+    can't fix it, so the workflow doesn't retry (the resume is FAILED with its parse_error)."""
+    outcome = await parsing.parse_resume(resume_id)
+    if outcome == "missing":
+        raise NotFoundError("Resume not found", code="RESUME_NOT_FOUND")
+    if outcome == "skipped":  # a repeated step: answer what the first run decided
+        async with session_scope() as session:
+            outcome = "parsed" if (await repo.get_resume(session, resume_id)).status == "PARSED" else "failed"
+    if outcome == "failed":
+        raise AppError("The resume could not be read", code="RESUME_UNREADABLE", http_status=422)
+    return {"status": "PARSED"}

@@ -95,33 +95,29 @@ async def one(sql: str):
         return (await s.execute(text(sql))).one()
 
 
-async def test_parse_saves_data_and_writes_resume_parsed(stores):
+async def test_parse_saves_the_parsed_data(stores):
     resume_id = await uploaded(make_pdf(RESUME_LINES))
     assert await parsing.parse_resume(resume_id) == "parsed"
     status, parsed = await one("SELECT status, parsed_data FROM resumes")
     assert status == "PARSED" and "python" in parsed["skills"] and parsed["education"] == ["Bachelor"]
-    event_type, payload = await one("SELECT event_type, payload FROM outbox")
-    assert event_type == "ResumeParsed" and payload["payload"]["resume_id"] == str(resume_id)
 
 
 async def test_running_twice_parses_once(stores):
-    """acks_late + retries mean the task can run again: the second run must do nothing."""
+    """Temporal may run the parse step again after a timeout: the second run must do nothing."""
     resume_id = await uploaded(make_docx(RESUME_LINES), DOCX)
     assert await parsing.parse_resume(resume_id) == "parsed"
     assert await parsing.parse_resume(resume_id) == "skipped"
-    assert (await one("SELECT count(*) FROM outbox"))[0] == 1
 
 
 async def test_unreadable_file_is_failed_not_retried(stores):
     resume_id = await uploaded(b"%PDF-1.4 this is not really a pdf")
-    assert await parsing.parse_resume(resume_id) == "failed"  # returns normally: Celery won't retry
+    assert await parsing.parse_resume(resume_id) == "failed"  # returns normally: the endpoint answers 422
     status, error = await one("SELECT status, parse_error FROM resumes")
     assert status == "FAILED" and "could not read" in error
-    assert (await one("SELECT count(*) FROM outbox"))[0] == 0
 
 
-async def test_unknown_resume_is_skipped(stores):
-    assert await parsing.parse_resume(uuid.uuid4()) == "skipped"
+async def test_unknown_resume_is_missing(stores):
+    assert await parsing.parse_resume(uuid.uuid4()) == "missing"
 
 # ---------------------------------------------------------------- enqueuing from the event
 

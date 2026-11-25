@@ -5,10 +5,8 @@ import logging
 import uuid
 
 from smarthire_common.auth import CurrentUser
-from smarthire_common.errors import ForbiddenError
-from smarthire_common.events import new_event
+from smarthire_common.errors import ForbiddenError, StillProcessingError
 from smarthire_common.models import new_id
-from smarthire_common.outbox import add_outbox_event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain import resumes as resume_rules
@@ -65,8 +63,10 @@ async def list_resumes(session: AsyncSession, user: CurrentUser) -> list[Resume]
 
 
 async def upload_resume(
-    session: AsyncSession, user: CurrentUser, *, file_name: str | None, data: bytes, max_bytes: int
-) -> Resume:
+    session: AsyncSession, orchestrator, user: CurrentUser, *, file_name: str | None, data: bytes, max_bytes: int
+) -> dict:
+    """Design v2.1: the file goes to storage first, then the orchestrator's ResumeProcessingWorkflow
+    registers it (its commit step is register_resume below; we wait for it) and has it parsed."""
     resume_rules.check_size(len(data), max_bytes)
     content_type = resume_rules.detect_content_type(data)  # from the bytes, not the client's header
     if await repo.get(session, user.user_id) is None:
@@ -76,37 +76,37 @@ async def upload_resume(
 
     resume_id = new_id()
     key = resume_rules.object_key(user.user_id, resume_id)
-    # File first, row second. If the row fails we delete the file. The other order could leave a
-    # row pointing at a file that never arrived, and the parser (Phase 10) would fail on it.
+    # File first, row second: a row must never point at a file that never arrived (the parser would fail)
     await files.put(key, data, content_type)
+    resume = {"id": str(resume_id), "candidate_id": str(user.user_id), "object_key": key,
+              "file_name": resume_rules.safe_file_name(file_name), "content_type": content_type, "size_bytes": len(data)}
     try:
-        # Lock the candidate row: two uploads by the same candidate take turns here, so the
-        # "deactivate old, insert new" pair never interleaves (the second one waits, then wins)
-        if await repo.get(session, user.user_id, for_update=True) is None:
-            raise CandidateNotFoundError(NO_PROFILE)  # profile deleted while we were uploading
-        resume = Resume(
-            id=resume_id,
-            candidate_id=user.user_id,
-            object_key=key,
-            file_name=resume_rules.safe_file_name(file_name),
-            content_type=content_type,
-            size_bytes=len(data),
-        )
-        await repo.add_active_resume(session, resume)
-        event = new_event(
-            "ResumeUploaded",
-            producer="candidate",
-            payload={"candidate_id": str(user.user_id), "resume_id": str(resume_id), "content_type": content_type},
-        )
-        await add_outbox_event(session, event, key=str(user.user_id))  # same transaction as the row
-        # TODO(Phase 10.2): enqueue parse_resume(resume_id)
-        await session.commit()
+        return await orchestrator.run_action("upload-resume", key={"resume_id": str(resume_id)},
+                                             input={"resume": resume})
+    except StillProcessingError:
+        raise  # the workflow may still register it: the file must stay
     except BaseException:
-        await session.rollback()
-        await _delete_quietly(key)
+        await _delete_quietly(key)  # nothing was registered (orchestrator down, or a rule said no)
         raise
-    await session.refresh(resume)  # server defaults: status, is_active, uploaded_at
-    return resume
+
+
+async def register_resume(session: AsyncSession, resume: dict) -> Resume:
+    """The commit step (POST /internal/resumes). Same id again (a retried step): the existing row."""
+    resume_id = uuid.UUID(resume["id"])
+    existing = await repo.get_resume(session, resume_id)
+    if existing is not None:
+        return existing
+    candidate_id = uuid.UUID(resume["candidate_id"])
+    # Lock the candidate row: two uploads by the same candidate take turns here, so the
+    # "deactivate old, insert new" pair never interleaves (the second one waits, then wins)
+    if await repo.get(session, candidate_id, for_update=True) is None:
+        raise CandidateNotFoundError(NO_PROFILE)  # profile deleted meanwhile
+    row = Resume(id=resume_id, candidate_id=candidate_id, object_key=resume["object_key"],
+                 file_name=resume["file_name"], content_type=resume["content_type"], size_bytes=resume["size_bytes"])
+    await repo.add_active_resume(session, row)
+    await session.commit()
+    await session.refresh(row)  # server defaults: status, is_active, uploaded_at
+    return row
 
 
 async def _delete_quietly(key: str) -> None:

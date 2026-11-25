@@ -146,7 +146,6 @@ services:
       S3_PUBLIC_ENDPOINT: localhost:9000           # what browsers use: download links are signed for it
       S3_ACCESS_KEY: ${CANDIDATE_S3_ACCESS_KEY}    # the service's own MinIO user (resumes bucket only)
       S3_SECRET_KEY: ${CANDIDATE_S3_SECRET_KEY}
-      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//   # enqueues parse_resume
       FORWARDED_ALLOW_IPS: 172.30.0.10             # trust X-Forwarded-For only from the gateway
     ports:
       - "127.0.0.1:8004:8004"                      # debugging only: clients go through the gateway
@@ -163,29 +162,38 @@ services:
       timeout: 3s
       retries: 5
 
-  candidate-worker:                                # Celery worker: parses resumes in the background
+  candidate-parser:                                # design v2.1: parses resumes (ResumeProcessingWorkflow's step)
     build:
       context: .
-      dockerfile: services/candidate/Dockerfile    # same image as the API, different command
-    command: ["celery", "-A", "app.tasks.celery_app", "worker", "-Q", "resumes", "--concurrency", "2", "--loglevel", "INFO"]
+      dockerfile: services/candidate/Dockerfile    # the Candidate image: the orchestrator calls its
+                                                   # /internal/resumes/{id}/parse here, so CPU-heavy parsing
+                                                   # never slows the public API. Replaces the Celery worker
     environment:
-      SERVICE_NAME: candidate
-      TRACING_ENABLED: "true"                     # the worker sends spans too (Phase 13)
+      SERVICE_NAME: candidate-parser
+      TRACING_ENABLED: "true"
+      PORT: "8004"
       DATABASE_URL: postgresql+asyncpg://candidate_user:${CANDIDATE_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DB_SCHEMA: candidate
+      REDIS_URL: redis://redis:6379/0
       S3_ENDPOINT: minio:9000
+      S3_PUBLIC_ENDPOINT: localhost:9000
       S3_ACCESS_KEY: ${CANDIDATE_S3_ACCESS_KEY}
       S3_SECRET_KEY: ${CANDIDATE_S3_SECRET_KEY}
-      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
-      DB_POOL_SIZE: 2                              # per worker PROCESS: it runs one task at a time
+      KAFKA_ENABLED: "false"                       # no outbox relay here: the API container has it
+      DB_POOL_SIZE: 2
       DB_MAX_OVERFLOW: 0
     depends_on:
       postgres:
         condition: service_healthy
-      rabbitmq:
+      redis:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   application:
     build:

@@ -19,4 +19,6 @@ ACTIONS: dict[str, Action] = {
     "register": Action("RegistrationWorkflow", lambda k: f"register-{k['email_hash']}"),
     "grant-role": Action("RoleChangeWorkflow", lambda k: f"role-{k['user_id']}-{k['role']}-grant"),
     "revoke-role": Action("RoleChangeWorkflow", lambda k: f"role-{k['user_id']}-{k['role']}-revoke"),
+    # Candidate (W9)
+    "upload-resume": Action("ResumeProcessingWorkflow", lambda k: f"resume-{k['resume_id']}"),
 }

@@ -54,11 +54,12 @@ async def upload_resume(
     user: CurrentUser = Depends(candidate_only),
     session: AsyncSession = Depends(get_session),
 ):
-    # 202 Accepted: stored, but parsing (Phase 10) happens after we answer
+    # 202 Accepted: stored and registered, but parsing happens after we answer
     max_bytes = request.app.state.settings.max_resume_bytes
     data = await file.read(max_bytes + 1)  # one byte over the limit is enough to know it's too big
-    resume = await service.upload_resume(session, user, file_name=file.filename, data=data, max_bytes=max_bytes)
-    return ResumeOut.model_validate(resume)
+    # Design v2.1: ResumeProcessingWorkflow registers it (we wait for that) and then parses it
+    return await service.upload_resume(session, request.app.state.orchestrator, user, file_name=file.filename,
+                                       data=data, max_bytes=max_bytes)
 
 
 @router.get("/{candidate_id}/resume/link")

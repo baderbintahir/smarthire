@@ -146,18 +146,28 @@ def test_upload_stores_the_file_and_the_row(client, with_profile, bucket_objects
     assert client.get("/candidates/me", headers=headers).json()["active_resume"]["id"] == body["id"]
 
 
-def test_upload_writes_resume_uploaded_to_the_outbox(client, with_profile, database_url):
+def test_upload_runs_the_upload_resume_action(client, with_profile, orchestrator):
+    """Design v2.1: the file is stored, then the orchestrator's ResumeProcessingWorkflow registers it (its
+    commit step is our own POST /internal/resumes) and has candidate-parser parse it."""
     user_id, headers = with_profile
     resume = upload(client, headers).json()
-    [row] = db_rows(database_url, "SELECT topic, message_key, payload FROM outbox")
-    assert (row["topic"], row["message_key"]) == ("candidates.profile", str(user_id))
-    assert row["payload"]["event_type"] == "ResumeUploaded"
-    assert row["payload"]["payload"] == {"candidate_id": str(user_id), "resume_id": resume["id"], "content_type": PDF}
+    [(action, key, payload)] = orchestrator.actions
+    assert action == "upload-resume" and key == {"resume_id": resume["id"]}
+    assert payload["resume"]["candidate_id"] == str(user_id) and payload["resume"]["content_type"] == PDF
+    assert "object_key" not in resume  # the storage layout stays internal
 
 
-def test_rejected_upload_writes_no_event(client, with_profile, database_url):
+def test_rejected_upload_starts_nothing(client, with_profile, orchestrator):
     assert upload(client, with_profile[1], data=b"MZ not a pdf").status_code == 415
-    assert db_rows(database_url, "SELECT count(*) AS n FROM outbox")[0]["n"] == 0
+    assert orchestrator.actions == []
+
+
+def test_orchestrator_down_means_503_and_no_file_left(client, with_profile, orchestrator, database_url, bucket_objects):
+    orchestrator.down = True
+    r = upload(client, with_profile[1])
+    assert r.status_code == 503 and r.json()["error"]["code"] == "WORKFLOWS_UNAVAILABLE"
+    assert db_rows(database_url, "SELECT count(*) AS n FROM resumes")[0]["n"] == 0
+    assert bucket_objects() == []  # the stored file was deleted again
 
 
 def test_docx_is_accepted(client, with_profile):
@@ -251,3 +261,12 @@ def test_resume_download_link(client, with_profile, tokens):
     downloaded = httpx.get(link["url"])  # the presigned URL works without any login
     assert downloaded.status_code == 200 and downloaded.content.startswith(b"%PDF-")
     assert client.get(f"/candidates/{user_id}/resume/link", headers=tokens.headers(role="CANDIDATE")).status_code == 403
+
+
+def test_parse_step_answers_the_same_every_time(client, with_profile, service_tokens):
+    """The parse step on an unreadable file is a 422 (not retried), and asking again gives the same answer."""
+    resume_id = upload(client, with_profile[1], data=b"%PDF-1.4 not really a pdf").json()["id"]
+    for _ in range(2):
+        r = client.post(f"/internal/resumes/{resume_id}/parse", headers=service_tokens.headers())
+        assert r.status_code == 422 and r.json()["error"]["code"] == "RESUME_UNREADABLE"
+    assert client.post(f"/internal/resumes/{resume_id}/parse", headers={"Idempotency-Key": "k"}).status_code == 401
