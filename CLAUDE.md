@@ -795,3 +795,7 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   app/services/facts.py (record_fact, slim, rebuild under LOCK TABLE facts EXCLUSIVE), POST /internal/facts, Kafka consumer
   now writes facts (fact_id = event_id), cli rebuild (from facts, no need to stop the service) + backfill-facts (group
   analytics-backfill). LIVE: backfilled 97 events -> 88 facts; rebuild from facts == read model before (fingerprint diff).
+- 14T LIVE CHECK after T9 (2026-11-25): the user ran `make keys` (orchestrator keys now exist); all changed services
+  redeployed (candidate-worker container removed, candidate-parser added); newman folders 1-9: 44 requests, 21 assertions,
+  0 failures, all through the orchestrator (16 workflows completed, 11 facts, application HIRED with score 95, resume
+  PARSED, 5 emails SENT via SendEmailWorkflow). Kafka and Celery carried nothing.
