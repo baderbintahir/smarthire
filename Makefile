@@ -47,7 +47,7 @@ load-test: ## Load test through the gateway: u users (default 500) for t (defaul
 load-verify: ## After a load test: nothing lost or duplicated, everything converged (Step 14.4)
 	$(LOAD) python tests/load/verify.py
 
-chaos: ## During a load test: stop/start Kafka, Scoring, Notification, its worker, Candidate (Step 14.5)
+chaos: ## During a load test: stop/start Scoring, Notification, Analytics, Candidate, the orchestrator (Step 14.5)
 	uv run --no-project python tests/load/chaos.py
 
 api-walkthrough: ## Regenerate docs/api-walkthrough.{md,html} from the Postman collection

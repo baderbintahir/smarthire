@@ -20,9 +20,9 @@ from smarthire_common.logging import request_id_var
 
 logger = logging.getLogger(__name__)
 
-# The orchestrator waits up to 10 s for the commit and then answers 503 STILL_PROCESSING itself; 12 s
-# here leaves room for that answer to arrive instead of us guessing
-DEFAULT_TIMEOUT_SECONDS = 12.0
+# The orchestrator waits up to 7 s for the commit and then answers 503 STILL_PROCESSING itself; 9 s here
+# leaves room for that answer, and stays under the gateway's 10 s (else the client sees a 504 instead)
+DEFAULT_TIMEOUT_SECONDS = 9.0
 
 
 class OrchestratorClient:

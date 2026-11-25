@@ -11,8 +11,9 @@ class Settings(BaseServiceSettings):
     payload_key_path: str = "/run/secrets/orchestrator/payload.key"  # AES-256 key, 64 hex characters
 
     # How long POST /actions waits for the commit step before answering 503 STILL_PROCESSING. Callers
-    # (OrchestratorClient) wait 12 s, so this answer reaches them
-    commit_wait_seconds: float = 10.0
+    # (OrchestratorClient) wait 9 s and the gateway 10 s, so this answer reaches the client (T11 load test:
+    # with 10 s here the gateway timed out first and clients saw 504)
+    commit_wait_seconds: float = 7.0
 
     # The owners of the data: every workflow step is an HTTP call to one of these (inside the network)
     identity_url: str = "http://identity:8001"

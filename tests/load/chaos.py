@@ -1,18 +1,18 @@
 """Step 14.5: while the load test runs, stop and restart one dependency at a time.
 Usage (second terminal, right after starting the load): `make chaos`. Then `make load-verify`.
 
-Each outage lasts 30 s, with 20 s between them. What should happen (and verify.py checks afterwards):
-  kafka               applies still 202 (outbox), events wait, then flow: backlog -> 0, lag -> 0
-  scoring             applications wait in SUBMITTED (Temporal retries the activity), then SCREENING
-                      (Scoring is also the Temporal worker for scoring-tq)
-  notification        events wait in Kafka (lag grows), then emails go out
-  notification-worker emails wait QUEUED in RabbitMQ, then go out
-  candidate           applies fail fast (503: Application's breaker), clients retry with the same key"""
+Each outage lasts 30 s, with 20 s between them. What should happen (and verify.py checks afterwards), design v2.1:
+  scoring        applications wait in SUBMITTED (the orchestrator retries the score step), then SCREENING
+  notification   emails wait (SendEmailWorkflow retries its steps), then go out
+  analytics      facts wait (record_fact is retried), then the metrics catch up
+  candidate      applies fail fast (503: Application's breaker), clients retry with the same key
+  orchestrator   applies fail fast (503 WORKFLOWS_UNAVAILABLE: nothing written), clients retry with the same
+                 key; running workflows continue when it is back (their state is in Temporal, not in it)"""
 
 import subprocess
 import time
 
-OUTAGES = ["kafka", "scoring", "notification", "notification-worker", "candidate"]
+OUTAGES = ["scoring", "notification", "analytics", "candidate", "orchestrator"]
 
 
 def compose(*args: str) -> None:

@@ -46,6 +46,7 @@ async def grant_role(session: AsyncSession, orchestrator: OrchestratorClient, us
     await _user_or_404(session, user_id)
     if role in await users_repo.get_roles(session, user_id):
         raise RoleAlreadyHeldError()
+    await session.rollback()  # free the connection: the commit step needs one from the same pool
     return await orchestrator.run_action(
         "grant-role", key={"user_id": str(user_id), "role": role},
         input={"user_id": str(user_id), "role": role, "granted_by": str(granted_by) if granted_by else None})
@@ -70,6 +71,7 @@ async def revoke_role(session: AsyncSession, orchestrator: OrchestratorClient, u
         raise RoleNotHeldError()
     if roles == [role]:
         raise LastRoleError()
+    await session.rollback()  # free the connection: the commit step needs one from the same pool
     await orchestrator.run_action("revoke-role", key={"user_id": str(user_id), "role": role},
                                   input={"user_id": str(user_id), "role": role, "revoked_by": str(revoked_by)})
 

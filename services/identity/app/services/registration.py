@@ -47,6 +47,10 @@ async def register_user(
         "current_company": current_company,
         "roles": sorted(roles, key=users_repo.ROLE_IDS.get),
     }
+    # Give the DB connection back BEFORE waiting for the orchestrator: its commit step calls OUR
+    # /internal/users, which needs a connection from the same pool. Holding ours while waiting deadlocked
+    # the pool under load (found in the Step T11 load test: 20 parallel registrations, all 503)
+    await session.rollback()
     return await orchestrator.run_action("register", key={"email_hash": email_hash(email)}, input={"user": user})
 
 

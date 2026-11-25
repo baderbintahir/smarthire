@@ -24,6 +24,7 @@ with workflow.unsafe.imports_passed_through():  # plain data + constants; httpx 
 # and the change is made as soon as the service is back (never "half")
 COMMIT_RETRY = RetryPolicy(initial_interval=timedelta(seconds=1), maximum_interval=timedelta(seconds=10))
 # Follow-up steps: patient backoff, no attempt limit (a step's schedule_to_close can still cap it)
+COMMIT_DEADLINE = timedelta(minutes=5)  # no commit by then: the request was lost
 FOLLOW_UP_RETRY = RetryPolicy(initial_interval=timedelta(seconds=2), maximum_interval=timedelta(seconds=60))
 
 
@@ -90,6 +91,20 @@ class CommitFirst:
             raise self.rejected
 
     async def wait_for_commit(self) -> bool:
-        """In run(): True once committed, False if the commit was rejected."""
-        await workflow.wait_condition(lambda: self.committed is not None or self.rejected is not None)
+        """In run(): True once committed, False if the commit was rejected. If no commit arrives at all
+        (the request was lost, e.g. the orchestrator restarted mid-request), the workflow FAILS after
+        COMMIT_DEADLINE: a failed workflow's id may be used again, so the caller's retry starts afresh."""
+        try:
+            await workflow.wait_condition(lambda: self.committed is not None or self.rejected is not None,
+                                          timeout=COMMIT_DEADLINE)
+        except TimeoutError:
+            raise ApplicationError("no commit arrived", type="NoCommit", non_retryable=True) from None
         return self.committed is not None
+
+    @workflow.query
+    def commit_outcome(self) -> dict:
+        """The commit's answer, also after the workflow finished: a caller retrying a finished action
+        gets this instead of a second run (which would repeat its follow-ups)."""
+        if self.rejected is not None:
+            return {"error": self.rejected.details[0] if self.rejected.details else {"status": 409}}
+        return {"result": self.committed}

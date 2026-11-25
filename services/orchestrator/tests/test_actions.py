@@ -173,3 +173,18 @@ async def test_jwks_publishes_the_service_token_key(setup):
     client, _, _, signer = setup
     r = await client.get("/.well-known/jwks.json")
     assert r.json() == signer.jwks()
+
+
+async def test_a_retry_after_the_action_finished_gets_the_same_answer_without_a_second_run(setup):
+    """A caller whose answer was lost retries after the workflow already finished: it gets the stored
+    answer, and the follow-up steps (emails, facts in real workflows) do not run again."""
+    client, things, temporal, _ = setup
+    first = await client.post("/actions/make-thing", json=make("done"))
+    assert await temporal.get_workflow_handle("thing-done").result() == "DONE"
+    again = await client.post("/actions/make-thing", json=make("done"))
+    assert again.status_code == 200 and again.json() == first.json()
+    assert things.after.count("done") == 1  # the follow-up ran once
+    rejected = await client.post("/actions/make-thing", json=make("dup2", name="duplicate"))
+    await temporal.get_workflow_handle("thing-dup2").result()
+    again = await client.post("/actions/make-thing", json=make("dup2", name="duplicate"))
+    assert again.status_code == rejected.status_code == 409  # a stored "no" is answered again too

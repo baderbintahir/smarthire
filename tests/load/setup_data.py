@@ -17,7 +17,7 @@ import uuid
 
 import httpx
 
-sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "events"))
+sys.path.insert(0, str(pathlib.Path(__file__).parent.parent / "workflows"))
 from resume_files import RESUME_LINES, make_pdf  # noqa: E402  (the e2e tests' PDF generator)
 
 IDENTITY, JOB, CANDIDATE = "http://localhost:8001", "http://localhost:8002", "http://localhost:8004"
@@ -46,7 +46,7 @@ async def candidate(http: httpx.AsyncClient, run: str, n: int, limit: asyncio.Se
     async with limit:
         user_id, token = await user(http, run, n, "CANDIDATE")
         auth = {"Authorization": f"Bearer {token}"}
-        # The profile is created from UserRegistered (Kafka); PUT also works if the event is late
+        # The profile is made by RegistrationWorkflow a moment after registering; PUT also works before that
         r = await http.put(f"{CANDIDATE}/candidates/me", json={"experience_years": 4},
                            headers=auth)
         r.raise_for_status()
