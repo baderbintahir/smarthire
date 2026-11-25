@@ -1546,7 +1546,21 @@ CREATE TABLE ai_usage_daily (
 );
 ```
 
-All updates are upserts (`INSERT … ON CONFLICT DO UPDATE SET count = count + 1`) inside the same transaction as the `processed_events` insert. This schema is a **disposable read model**: it can be dropped and rebuilt by replaying events.
+All updates are upserts (`INSERT … ON CONFLICT DO UPDATE SET count = count + 1`) inside the same transaction as the `facts` insert (design v2.0). This schema is a **disposable read model**: it can be dropped and rebuilt by replaying the `facts` table (`python -m app.cli rebuild`).
+
+```sql
+-- Design v2.0: Analytics' own append-only history. Workflows record facts through POST /internal/facts
+CREATE TABLE facts (
+  fact_id     text PRIMARY KEY,                -- workflow id + run id + kind: a retried step is stored once
+  kind        text NOT NULL CONSTRAINT ck_facts_kind CHECK (kind IN ('UserRegistered','RoleGranted','RoleRevoked',
+                'JobReady','JobPublishFailed','ApplicationSubmitted','ApplicationStageChanged',
+                'ApplicationDecisionMade','CandidateScored','SystemFailure','AssistantQueryCompleted')),
+  occurred_at timestamptz NOT NULL,            -- when it happened (a rebuild replays in this order)
+  data        jsonb NOT NULL,                  -- only the fields the metrics need (ids, a title, a stage)
+  recorded_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX ix_facts_occurred_at ON facts (occurred_at);
+```
 
 ## E.10 Shared tables (every PostgreSQL service that publishes or consumes)
 
