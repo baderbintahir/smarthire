@@ -8,12 +8,11 @@ import pytest
 from alembic import command
 from smarthire_common import db, testing
 
-# Importing the Celery app (app.tasks) builds Settings() at import time, as the worker does
+# A placeholder for Settings() built outside the fixtures (alembic env.py); the fixtures use real values
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://unused@localhost/unused")
-os.environ.setdefault("CELERY_BROKER_URL", "memory://")
 
 SERVICE_DIR = Path(__file__).resolve().parents[1]
-TABLES = ["notification_log", "processed_events"]  # NOT notification_templates: seeded by the migration
+TABLES = ["notification_log"]  # NOT notification_templates: seeded by the migration
 
 
 @pytest.fixture(scope="session")
@@ -56,7 +55,7 @@ def make_client(migrated, database_url, service_tokens):
     stack = ExitStack()
 
     def make(mailer):
-        settings = Settings(database_url=database_url, kafka_enabled=False, _env_file=None)
+        settings = Settings(database_url=database_url, _env_file=None)
         return stack.enter_context(TestClient(create_app(settings, service_key_provider=service_tokens.key_provider,
                                                          mailer=mailer)))
 

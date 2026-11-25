@@ -21,25 +21,14 @@ groups:
         annotations:
           summary: "Activities on {{ $labels.task_queue }} wait > 5 s for a worker (too few workers, or one is down)"
 
-      # ---- Kafka (choreography)
-      - alert: ConsumerLagGrowing
-        expr: sum by (consumer) (smarthire_consumer_lag) > 100 and sum by (consumer) (delta(smarthire_consumer_lag[5m])) > 0
+      # ---- Workflow steps (design v2.1: every step is an HTTP call from the orchestrator to /internal/*)
+      - alert: WorkflowStepsFailing
+        expr: sum by (service, route) (increase(http_requests_total{route=~"/internal/.*", status=~"5.."}[10m])) > 5
         for: 5m
         annotations:
-          summary: "Consumer group {{ $labels.consumer }} is falling behind"
-      - alert: MessageDeadLettered
-        expr: sum by (consumer, topic) (increase(smarthire_dlq_messages_total[10m])) > 0
-        annotations:
-          summary: "{{ $labels.consumer }} dead-lettered a message from {{ $labels.topic }}: inspect {{ $labels.topic }}.dlq"
-      - alert: OutboxStuck
-        expr: smarthire_outbox_oldest_age_seconds > 60
-        for: 1m
-        annotations:
-          summary: "{{ $labels.service }} has events waiting > 60 s in its outbox (Kafka down or the relay stuck)"
-
-      # ---- Celery
-      - alert: TaskQueueBackingUp
-        expr: sum by (queue) (rabbitmq_detailed_queue_messages_ready{queue=~"emails|resumes"}) > 50
+          summary: "{{ $labels.service }} keeps answering 5xx on {{ $labels.route }}: the orchestrator retries, but those workflows wait"
+      - alert: ActivitiesRetrying
+        expr: sum by (task_queue) (increase(temporal_activity_execution_failed[10m])) > 20
         for: 5m
         annotations:
-          summary: "{{ $labels.queue }} has > 50 tasks waiting (workers stopped or too slow)"
+          summary: "Many workflow steps on {{ $labels.task_queue }} are failing and retrying (a service down, or a bug)"

@@ -3,7 +3,7 @@ name = "smarthire-job-enrichment"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "smarthire-common[temporal,mongo]",
+    "smarthire-common[mongo]",
     "uvicorn[standard]>=0.30",
     "yake>=0.4.8",  # unsupervised keyword extraction (no model download, no network)
 ]

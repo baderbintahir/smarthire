@@ -63,8 +63,7 @@ async def test_schema_names_match_appendix_e7_exactly(migrated, database_url):
         "ck_application_notes_body_not_empty", "ix_application_notes_app_created",
         "pk_application_quotas", "ck_application_quotas_active_count_non_negative",
         "pk_audit_entries", "ix_audit_entries_entity",
-        "pk_outbox", "uq_outbox_event_id", "ix_outbox_unpublished", "pk_processed_events",
-    }
+        }
 
 
 # ---------- rules enforced by constraints ----------

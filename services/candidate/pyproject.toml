@@ -3,7 +3,7 @@ name = "smarthire-candidate"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "smarthire-common[celery]",
+    "smarthire-common",
     "uvicorn[standard]>=0.30",
     "alembic>=1.13",
     "minio>=7.2",  # S3 client for MinIO (resume files)

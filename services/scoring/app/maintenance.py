@@ -1,15 +1,16 @@
-"""Retention jobs for Scoring (Step 14.3b, Appendix E.14): published documents in the Mongo outbox.
+"""Retention jobs for Scoring (Step 14.3b, Appendix E.14): none since design v2.0 (the Mongo outbox is gone).
+Kept so every service has the same entry point.
 
 Run them all now (instead of waiting for the schedule): `docker compose exec scoring python -m app.maintenance`."""
 
 import asyncio
 
 from smarthire_common.mongo import close_mongo, init_mongo
-from smarthire_common.retention import mongo_outbox_job, run_all
+from smarthire_common.retention import run_all
 
 from app.config import Settings
 
-JOBS = [mongo_outbox_job()]
+JOBS: list = []
 
 
 async def _main() -> None:

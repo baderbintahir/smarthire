@@ -7,7 +7,7 @@ from smarthire_common import db, testing
 from app.models.projections import PROJECTION_TABLES
 
 SERVICE_DIR = Path(__file__).resolve().parents[1]
-TABLES = PROJECTION_TABLES + ["processed_events", "facts"]
+TABLES = PROJECTION_TABLES + ["facts"]
 
 
 @pytest.fixture(scope="session")
@@ -56,7 +56,7 @@ def client(migrated, database_url, redis_url, tokens, service_tokens):
 
     testing.run(testing.truncate(database_url, TABLES))
     testing.run(testing.flush_redis(redis_url))
-    settings = Settings(database_url=database_url, redis_url=redis_url, kafka_enabled=False, _env_file=None)
+    settings = Settings(database_url=database_url, redis_url=redis_url, _env_file=None)
     with TestClient(create_app(settings, key_provider=tokens.key_provider,
                                service_key_provider=service_tokens.key_provider)) as c:
         yield c

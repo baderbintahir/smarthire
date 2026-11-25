@@ -1,16 +1,12 @@
 """Data retention: scheduled clean-up of rows that are no longer needed (Step 14.3b, Appendix E.14).
 
-Without it, `outbox` and `processed_events` grow by one row per event, forever. The rules:
-  - published outbox rows older than 7 days: Kafka has them (and consumers' processed_events guard
-    against the rare re-send), the row has done its job
-  - processed_events older than 30 days: they only matter while a redelivery is still possible. Kafka
-    redelivers what it still holds, so keep these LONGER than the topics' retention (7 days)
-  - service-specific jobs (refresh tokens, notification log) live in each service's app/maintenance.py
+Each service lists its own jobs in app/maintenance.py (e.g. Notification: sent emails older than 90 days).
+Design v2.0 removed the outbox and processed_events tables, and with them their clean-up jobs.
 
 Deletes run in BATCHES (1000 rows, one short transaction each): one huge DELETE would hold locks and
 bloat the write-ahead log for minutes while the service keeps serving traffic.
 
-Jobs run as a background task in each service (like the relay and consumers): first run a minute after
+Jobs run as a background task in each service: first run a minute after
 startup, then every `every_seconds`. Two replicas running the same job at once is harmless (a row can
 only be deleted once). Run all jobs now by hand: `docker compose exec <svc> python -m app.maintenance`."""
 
@@ -51,36 +47,6 @@ async def delete_in_batches(sql: str, **params) -> int:
         if deleted < BATCH:
             return total
         await asyncio.sleep(0)  # let requests in between batches
-
-
-def outbox_job(days: int = 7) -> RetentionJob:
-    async def run() -> int:
-        return await delete_in_batches(
-            "DELETE FROM outbox WHERE id IN (SELECT id FROM outbox"
-            " WHERE published_at < now() - make_interval(days => :days) ORDER BY id LIMIT :batch)", days=days)
-    return RetentionJob("outbox", run)
-
-
-def processed_events_job(days: int = 30) -> RetentionJob:
-    async def run() -> int:
-        # No single-column key: ctid is the row's physical address, good for "delete these rows" in one statement
-        return await delete_in_batches(
-            "DELETE FROM processed_events WHERE ctid IN (SELECT ctid FROM processed_events"
-            " WHERE processed_at < now() - make_interval(days => :days) LIMIT :batch)", days=days)
-    return RetentionJob("processed_events", run)
-
-
-def mongo_outbox_job(days: int = 7) -> RetentionJob:
-    """Mongo services (Scoring): published outbox documents older than `days`."""
-    async def run() -> int:
-        from datetime import UTC, datetime, timedelta
-
-        from smarthire_common.mongo import get_db
-
-        cutoff = datetime.now(UTC) - timedelta(days=days)
-        result = await get_db()["outbox"].delete_many({"published_at": {"$ne": None, "$lt": cutoff}})
-        return result.deleted_count
-    return RetentionJob("outbox", run)
 
 
 async def run_job(job: RetentionJob) -> int:

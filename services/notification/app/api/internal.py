@@ -48,7 +48,7 @@ async def _id_of(key: str):
 async def send_email(key: str, request: Request) -> dict:
     notification_id = await _id_of(key)
     try:
-        outcome = await sending.send(notification_id, request.app.state.mailer, give_up=False)
+        outcome = await sending.send(notification_id, request.app.state.mailer)
     except sending.SendLater as exc:
         # 5xx: "try again later". The attempt and its error are recorded on the row
         raise ServiceUnavailableError(f"SMTP unavailable: {exc}", code="SMTP_UNAVAILABLE") from None

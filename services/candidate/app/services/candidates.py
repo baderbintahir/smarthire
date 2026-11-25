@@ -19,8 +19,8 @@ from app.schemas.candidate import ProfileIn
 
 log = logging.getLogger(__name__)
 
-# Profiles are created from the UserRegistered event (app/events/handlers.py), a moment after
-# registration. Until it arrives (or if Kafka is down), a candidate can create theirs with PUT
+# Profiles are created by the orchestrator's RegistrationWorkflow (PUT /internal/candidates/{id}), a
+# moment after registration. Until that step has run, a candidate can create theirs with PUT
 NO_PROFILE = "Create your profile first (PUT /candidates/me)"
 
 

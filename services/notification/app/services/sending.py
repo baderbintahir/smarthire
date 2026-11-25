@@ -1,8 +1,9 @@
-"""Use case: send one queued email (Step 11.3). Called by the Celery task in app/tasks/email.py.
+"""Use case: send one queued email (Step 11.3; design v2.0: the send_email step of the orchestrator's
+SendEmailWorkflow, POST /internal/emails/{key}/send).
 
-Never twice: the row is locked while sending (a parallel duplicate task skips it), and only a QUEUED
-row is sent; SENT is recorded in the same transaction. Never blocking hiring: this runs in the
-notification worker, far from any request; if SMTP is down, emails wait and are retried.
+Never twice: the row is locked while sending (a parallel duplicate call skips it), and only a QUEUED
+row is sent; SENT is recorded in the same transaction. Never blocking hiring: it runs in its own
+workflow, far from any request; if SMTP is down, the workflow retries with backoff.
 
 A CIRCUIT BREAKER guards SMTP: after 3 failures in a row it "opens" and, for 30 s, fails instantly
 without even trying (no point hammering a server that's down, and no tasks stuck in timeouts). Then
@@ -21,8 +22,6 @@ from smarthire_common.telemetry import get_tracer
 
 from app.domain.templates import render
 from app.repositories import notifications as repo
-
-MAX_ATTEMPTS = 6  # real SMTP attempts per email; then FAILED (a human can look at last_error)
 
 breaker = pybreaker.CircuitBreaker(fail_max=3, reset_timeout=30)  # one per worker process
 
@@ -45,10 +44,9 @@ def smtp_mailer(host: str, port: int, sender: str) -> Callable[[str, str, str], 
     return send
 
 
-async def send(notification_id: uuid.UUID, mailer: Callable[[str, str, str], None], *, give_up: bool = True) -> str:
+async def send(notification_id: uuid.UUID, mailer: Callable[[str, str, str], None]) -> str:
     """Returns what happened: sent, skipped (already done), busy (another task has it), missing, failed.
-    give_up=True: FAILED after MAX_ATTEMPTS (the Celery path). False: never here, the caller decides when to
-    give up (SendEmailWorkflow, design v2.0, whose retry policy owns the limit)."""
+    Never gives up by itself: SendEmailWorkflow's retry policy decides when to stop (design v2.0)."""
     async with session_scope() as session:
         locked = await repo.lock_for_sending(session, notification_id)
         if locked is None:
@@ -63,11 +61,8 @@ async def send(notification_id: uuid.UUID, mailer: Callable[[str, str, str], Non
         except pybreaker.CircuitBreakerError as exc:
             raise SendLater("circuit open: SMTP recently failing, not trying for now") from exc
         except (smtplib.SMTPException, OSError) as exc:
-            final = give_up and log.attempts + 1 >= MAX_ATTEMPTS
-            await repo.record_failure(session, notification_id, f"{type(exc).__name__}: {exc}", final=final)
+            await repo.record_failure(session, notification_id, f"{type(exc).__name__}: {exc}", final=False)
             await session.commit()  # keep the failure record (raising below would roll it back)
-            if final:
-                return "failed"
             raise SendLater(str(exc)) from exc
         await repo.mark_sent(session, notification_id)
     return "sent"

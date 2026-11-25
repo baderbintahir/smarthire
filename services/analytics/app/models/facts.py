@@ -1,7 +1,6 @@
 """Design v2.0 (Appendix E.9): Analytics' own append-only log of facts. Workflows record facts through
-POST /internal/facts; until Kafka is removed (Step T10) the consumer records events here too. The
-projections are computed from it, and a rebuild replays it, so history no longer depends on anyone
-else's retention."""
+POST /internal/facts (the facts from before design v2.0 were copied in from Kafka once, in Step T4). The
+projections are computed from it, and a rebuild replays it, so history depends on no one else's retention."""
 
 from datetime import datetime
 
@@ -24,7 +23,7 @@ class Fact(Base):
         Index("ix_facts_occurred_at", "occurred_at"),  # a rebuild replays in time order
     )
 
-    # Workflow id + kind (or the Kafka event id): the same fact recorded twice is stored once
+    # Workflow run + kind (or, for facts from before v2.0, the Kafka event id): stored once
     fact_id: Mapped[str] = mapped_column(Text, primary_key=True)
     kind: Mapped[str] = mapped_column(Text)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))  # when it happened, not when stored

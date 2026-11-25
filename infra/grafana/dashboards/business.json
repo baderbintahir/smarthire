@@ -134,13 +134,9 @@
       },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(increase(smarthire_events_consumed_total{consumer=\"analytics\", event_type=\"CandidateScored\", outcome=\"processed\"}[1h]))",
-          "legendFormat": "scored",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum(increase(http_requests_total{service=\"scoring\", route=\"/internal/scores\", status=\"200\"}[1h]))",
+          "legendFormat": "scored"
         }
       ],
       "gridPos": {
@@ -168,7 +164,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Events handled by Notification per hour",
+      "title": "Emails sent per hour",
       "description": "",
       "datasource": {
         "type": "prometheus",
@@ -176,13 +172,9 @@
       },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (event_type) (increase(smarthire_events_consumed_total{consumer=\"notification\", outcome=\"processed\"}[1h]))",
-          "legendFormat": "{{event_type}}",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum by (status) (increase(http_requests_total{service=\"notification\", route=\"/internal/emails/{key}/send\"}[1h]))",
+          "legendFormat": "{{status}}"
         }
       ],
       "gridPos": {

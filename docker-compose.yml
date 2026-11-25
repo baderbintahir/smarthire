@@ -167,7 +167,7 @@ services:
       context: .
       dockerfile: services/candidate/Dockerfile    # the Candidate image: the orchestrator calls its
                                                    # /internal/resumes/{id}/parse here, so CPU-heavy parsing
-                                                   # never slows the public API. Replaces the Celery worker
+                                                   # never slows the public API (it replaced the Celery worker)
     environment:
       SERVICE_NAME: candidate-parser
       TRACING_ENABLED: "true"
@@ -179,7 +179,6 @@ services:
       S3_PUBLIC_ENDPOINT: localhost:9000
       S3_ACCESS_KEY: ${CANDIDATE_S3_ACCESS_KEY}
       S3_SECRET_KEY: ${CANDIDATE_S3_SECRET_KEY}
-      KAFKA_ENABLED: "false"                       # no outbox relay here: the API container has it
       DB_POOL_SIZE: 2
       DB_MAX_OVERFLOW: 0
     depends_on:
@@ -210,8 +209,7 @@ services:
       FORWARDED_ALLOW_IPS: 172.30.0.10             # trust X-Forwarded-For only from the gateway
     # Step 14.4: the load test showed ONE Application process saturating one CPU core (Python runs one
     # thread of Python at a time). Two replicas share the work: APISIX and Prometheus find both through
-    # Docker's DNS (`application` resolves to every replica). Their Kafka consumers split the partitions,
-    # their relays share the outbox (SKIP LOCKED), their Temporal workers poll the same task queue.
+    # Docker's DNS (`application` resolves to every replica); so does the orchestrator for its steps.
     # No host port: two replicas can't both publish 8005 (debug with `docker compose exec application ...`)
     deploy:
       replicas: 2
@@ -275,14 +273,12 @@ services:
     build:
       context: .
       dockerfile: services/notification/Dockerfile
-    environment: &notification-env
+    environment:
       SERVICE_NAME: notification
       TRACING_ENABLED: "true"                     # spans to Jaeger (Phase 13)
       PORT: "8007"
       DATABASE_URL: postgresql+asyncpg://notification_user:${NOTIFICATION_DB_PASSWORD}@postgres:5432/${POSTGRES_DB}
       DB_SCHEMA: notification
-      IDENTITY_URL: http://identity:8001           # internal API: recipients' addresses
-      CELERY_BROKER_URL: amqp://guest:guest@rabbitmq:5672//
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
     ports:
@@ -295,21 +291,6 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-
-  notification-worker:                             # Celery worker + beat (sweeper): sends the emails
-    build:
-      context: .
-      dockerfile: services/notification/Dockerfile # same image, different command
-    command: ["celery", "-A", "app.tasks.celery_app", "worker", "-B", "-Q", "emails", "--concurrency", "2", "--loglevel", "INFO"]
-    environment:
-      <<: *notification-env                        # the same settings as the consumer above, plus:
-      DB_POOL_SIZE: 2                              # per worker PROCESS: it runs one task at a time
-      DB_MAX_OVERFLOW: 0
-    depends_on:
-      postgres:
-        condition: service_healthy
-      rabbitmq:
-        condition: service_healthy
 
   mailpit:
     image: axllent/mailpit:v1.31.4                 # catches every email; nothing leaves your machine
@@ -410,11 +391,11 @@ services:
 
   mongo:
     image: mongo:8.0.34
-    # A single-node REPLICA SET: MongoDB transactions (needed for the outbox: change + event together,
-    # Phase 10 Scoring) only work on a replica set. Clients use ?directConnection=true
+    # A single-node REPLICA SET (kept from Phase 10, when Scoring's Mongo outbox needed transactions; it costs
+    # nothing and keeps the door open for them). Clients use ?directConnection=true
     command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
-      - "127.0.0.1:27017:27017"                    # no auth locally (like Redis/Kafka): localhost only
+      - "127.0.0.1:27017:27017"                    # no auth locally (like Redis): localhost only
     volumes:
       - mongodata:/data/db
     healthcheck:                                   # also initiates the replica set on first start
@@ -424,124 +405,6 @@ services:
       timeout: 10s
       retries: 10
       start_period: 10s
-
-  rabbitmq:
-    image: rabbitmq:4.1.8-management
-    environment:
-      # Local dev: allow the default guest/guest account from other containers (it's localhost-only by
-      # default). Like Redis/Kafka/Mongo here: no real credentials; production uses per-service users
-      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit loopback_users []"
-    ports:
-      - "127.0.0.1:5672:5672"                      # AMQP (Celery)
-      - "127.0.0.1:15672:15672"                    # management UI: http://localhost:15672 (guest/guest)
-    volumes:
-      - rabbitmqdata:/var/lib/rabbitmq
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 20s
-
-  # ------------------------------------------------------------ events (Phase 7)
-  kafka:
-    image: apache/kafka:4.3.1                      # official image; KRaft mode, no ZooKeeper
-    environment:
-      # One node that is both broker (stores/serves messages) and controller (cluster metadata)
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      CLUSTER_ID: i8Z_v918RlWSsFad7Sahhg           # fixed id (not a secret): the data volume belongs to this cluster
-      # Listeners: Kafka tells clients which address to reconnect to ("advertised"). Containers must
-      # be told kafka:19092, the host machine localhost:9092, so each gets its own listener.
-      KAFKA_LISTENERS: INTERNAL://:19092,EXTERNAL://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:19092,EXTERNAL://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LOG_DIRS: /var/lib/kafka/data          # where messages are stored (the volume below)
-      # Only one broker: Kafka's own internal topics can't have 3 copies (its default)
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
-      # Topics are created on purpose (infra/kafka/create-topics.sh), never by a typo
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
-      # Keep consumer groups' committed offsets for a year (default 7 days after a group goes idle).
-      # History topics are kept forever and consumers start at "earliest" when they have no offset:
-      # with the default, a stack left off for a week would replay ALL history into every consumer,
-      # far beyond processed_events' 30-day dedupe window (duplicate emails, workflows).
-      KAFKA_OFFSETS_RETENTION_MINUTES: 525600
-      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0    # dev: consumers start immediately (default waits 3 s)
-      KAFKA_HEAP_OPTS: -Xmx512m -Xms512m           # keep the JVM laptop-sized
-    ports:
-      - "127.0.0.1:9092:9092"                      # localhost only: no authentication on this listener
-    volumes:
-      - kafkadata:/var/lib/kafka/data
-    healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 20s
-
-  kafka-init:                                      # one-shot: creates the topics, then exits
-    image: apache/kafka:4.3.1                      # same image: it ships kafka-topics.sh
-    entrypoint: ["bash", "/init/create-topics.sh"]
-    volumes:
-      - ./infra/kafka:/init:ro
-    depends_on:
-      kafka:
-        condition: service_healthy
-
-  schema-registry:
-    image: confluentinc/cp-schema-registry:8.0.8
-    environment:
-      SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
-      # Schemas are themselves stored in a Kafka topic (_schemas)
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:19092
-      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
-      # BACKWARD (the default, stated on purpose): a new schema version must still read old events
-      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: backward
-      SCHEMA_REGISTRY_HEAP_OPTS: -Xmx256m -Xms256m
-    ports:
-      - "127.0.0.1:8081:8081"
-    depends_on:
-      kafka:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:8081/subjects"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
-
-  schema-init:                                     # one-shot: registers the event schemas, then exits
-    image: python:3.12-slim                        # the script needs only the standard library
-    command: ["python", "/init/register.py"]
-    environment:
-      SCHEMA_REGISTRY_URL: http://schema-registry:8081
-      PYTHONPATH: /chassis                         # imports smarthire_common.event_catalog (stdlib only)
-    volumes:
-      - ./infra/schema-registry:/init:ro
-      - ./libs/smarthire_common:/chassis:ro         # the schemas live in the chassis package
-    depends_on:
-      schema-registry:
-        condition: service_healthy
-
-  kafka-ui:
-    image: kafbat/kafka-ui:v1.5.0                  # maintained fork of provectuslabs/kafka-ui (abandoned)
-    environment:
-      KAFKA_CLUSTERS_0_NAME: smarthire-local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
-      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
-    ports:
-      - "127.0.0.1:8085:8080"                      # http://localhost:8085; no login, so localhost only
-    depends_on:
-      kafka:
-        condition: service_healthy
 
   # ---------------------------------------------------------------- observability (Phase 13)
   jaeger:
@@ -598,10 +461,8 @@ volumes:
   pgdata:
   redisdata:
   miniodata:
-  kafkadata:
   temporaldata:
   mongodata:
-  rabbitmqdata:
   promdata:
   grafanadata:
 

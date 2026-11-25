@@ -1,18 +1,17 @@
-"""Retention jobs for Analytics (Step 14.3b, Appendix E.14): processed_events.
-
-A rebuild (app.cli) empties processed_events anyway; between rebuilds the table would grow by one row per
-event ever consumed.
+"""Retention jobs for Analytics (Step 14.3b, Appendix E.14): none. processed_events is gone (design v2.0), and
+`facts` is kept forever on purpose: it is the history every rebuild replays. Kept so every service has the
+same entry point.
 
 Run them all now (instead of waiting for the schedule): `docker compose exec analytics python -m app.maintenance`."""
 
 import asyncio
 
 from smarthire_common.db import close_db, init_db
-from smarthire_common.retention import processed_events_job, run_all
+from smarthire_common.retention import run_all
 
 from app.config import Settings
 
-JOBS = [processed_events_job()]
+JOBS: list = []
 
 
 async def _main() -> None:

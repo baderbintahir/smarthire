@@ -22,13 +22,7 @@ class BaseServiceSettings(BaseSettings):
     orchestrator_url: str = "http://orchestrator:8012"
     orchestrator_jwks_url: str = "http://orchestrator:8012/.well-known/jwks.json"  # keys of its service tokens
 
-    # --- Events (Phase 7); only used by services that publish or consume ---
-    kafka_bootstrap_servers: str = "kafka:19092"  # inside Compose; localhost:9092 from the host
-    schema_registry_url: str = "http://schema-registry:8081"
-    # Start the outbox relay / consumers with the app. Tests turn this off (no Kafka there)
-    kafka_enabled: bool = True
-
-    # --- Workflows (Phase 9); only used by services with Temporal workers or clients ---
+    # --- Workflows (Phase 9); design v2.1: only the orchestrator talks to Temporal ---
     temporal_address: str = "temporal:7233"
     temporal_namespace: str = "default"
     temporal_enabled: bool = True  # start the Temporal worker with the app; tests turn it off
@@ -41,9 +35,6 @@ class BaseServiceSettings(BaseSettings):
     db_pool_size: int = 5  # connections kept open per process
     db_max_overflow: int = 5  # extra connections under load (closed again afterwards)
     redis_timeout_seconds: float = 2.0  # connect + each command; a HUNG Redis must not hang requests
-
-    # --- Background tasks (Phase 10); only used by services with Celery tasks ---
-    celery_broker_url: str = "amqp://guest:guest@rabbitmq:5672//"
 
     # --- Tracing (Phase 13). Off by default so tests never try to reach Jaeger; Compose turns it on ---
     tracing_enabled: bool = False

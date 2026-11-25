@@ -10,7 +10,6 @@ from smarthire_common.logging import setup_logging
 from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.orchestrator_client import OrchestratorClient
-from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
 from smarthire_common.retention import start_retention
 from smarthire_common.service_auth import close_service_auth, init_service_auth
@@ -50,11 +49,9 @@ def create_app(
         app.state.orchestrator = orchestrator or OrchestratorClient(settings.orchestrator_url)
         register_readiness_check("database", db_ping_check)
         register_readiness_check("redis", redis_ping_check)
-        # Design v2.1: no consumer and no Temporal worker here any more: the orchestrator runs the
-        # application workflows and calls /internal/* for each step. The outbox relay stays until Step T10
-        # removes Kafka (nothing writes to the outbox now)
-        tasks = [start_outbox_relay(settings)] if settings.kafka_enabled else []
-        tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
+        # Design v2.1: no consumer, no outbox, no Temporal worker: the orchestrator runs the application
+        # workflows and calls /internal/* for each step
+        tasks = start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
         await app.state.candidates.close()

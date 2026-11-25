@@ -1,6 +1,6 @@
 """Temporal client and worker helpers (Phase 9). Needs the `temporal` extra: smarthire-common[temporal].
 
-A service must start even while Temporal is down (like Kafka: the API keeps working). So the
+A service must start even while Temporal is down (its health and read endpoints keep working). So the
 worker connects in the background and keeps retrying, instead of failing the app's startup.
 
 Observability (Phase 13): the client carries OpenTelemetry's TracingInterceptor, so starting a workflow

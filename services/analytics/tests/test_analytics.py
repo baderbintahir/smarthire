@@ -1,5 +1,5 @@
-"""Phase 12 + design v2.0: facts -> projections -> metrics, on real Postgres. Events still arrive through the
-real idempotent consumer (until Step T10) and become facts; workflows record facts via POST /internal/facts."""
+"""Phase 12 + design v2.0: facts -> projections -> metrics, on real Postgres. Workflows record facts through
+POST /internal/facts; every fact goes through record_fact, which stores it once and applies it once."""
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -7,29 +7,23 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from alembic import command
 from smarthire_common import db
-from smarthire_common.events import EventEnvelope
-from smarthire_common.kafka import EventConsumer
 
-from app.events import handlers
+from app.services import facts as facts_service
 from app.services import metrics
 
 TODAY = date(2026, 11, 3)
 
 
-def event(event_type: str, payload: dict, at: datetime | None = None) -> EventEnvelope:
-    return EventEnvelope(event_type=event_type, producer="test", payload=payload,
-                         occurred_at=at or datetime(2026, 11, 3, 10, tzinfo=UTC))
+def event(kind: str, data: dict, at: datetime | None = None) -> dict:
+    """A fact as a workflow records it; its id is fixed here, so feeding it twice tests the duplicate guard."""
+    return {"fact_id": f"test:{uuid.uuid4()}", "kind": kind, "data": data,
+            "occurred_at": at or datetime(2026, 11, 3, 10, tzinfo=UTC)}
 
 
-@pytest.fixture
-def consumer():
-    return EventConsumer(name=handlers.CONSUMER_NAME, topics=handlers.TOPICS, handlers=handlers.HANDLERS,
-                         bootstrap_servers="unused", schema_registry_url="unused")
-
-
-async def feed(consumer, *events):
-    for e in events:
-        await consumer.process(e, handlers.HANDLERS[e.event_type])
+async def feed(*facts):
+    for fact in facts:
+        async with db.session_scope() as s:
+            await facts_service.record_fact(s, **fact)
 
 
 async def numbers() -> dict:
@@ -71,16 +65,15 @@ def test_models_match_migrations(migrated):
     command.check(migrated)
 
 
-# ---------------------------------------------------------------- the metrics, end to end through the handlers
+# ---------------------------------------------------------------- the metrics, end to end through record_fact
 
 
-async def test_all_metrics_from_a_small_story(database, consumer):
+async def test_all_metrics_from_a_small_story(database):
     job_a, job_b = str(uuid.uuid4()), str(uuid.uuid4())
     jane, john = str(uuid.uuid4()), str(uuid.uuid4())
     apps = [str(uuid.uuid4()) for _ in range(3)]
     day1, day2 = datetime(2026, 11, 1, 9, tzinfo=UTC), datetime(2026, 11, 2, 9, tzinfo=UTC)
     await feed(
-        consumer,
         event("UserRegistered", {"user_id": jane, "role": "CANDIDATE"}),
         event("UserRegistered", {"user_id": john, "role": "CANDIDATE"}),
         event("UserRegistered", {"user_id": str(uuid.uuid4()), "role": "RECRUITER"}),
@@ -105,16 +98,16 @@ async def test_all_metrics_from_a_small_story(database, consumer):
     assert m["failures_last_30_days"] == {"total": 2, "by_source": {"candidate": 1, "job_publishing_workflow": 1}}
 
 
-async def test_replayed_events_change_nothing(database, consumer):
+async def test_replayed_events_change_nothing(database):
     events = [event("UserRegistered", {"user_id": str(uuid.uuid4()), "role": "CANDIDATE"}),
               submitted(str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()))]
-    await feed(consumer, *events)
+    await feed(*events)
     before = await numbers()
-    await feed(consumer, *events)  # redelivered
+    await feed(*events)  # recorded again (a retried step)
     assert await numbers() == before
 
 
-async def test_totals_count_role_holders_through_grant_revoke_and_replay(database, consumer):
+async def test_totals_count_role_holders_through_grant_revoke_and_replay(database):
     """Design v1.1: a person holding two roles is counted in both totals; grants add, revokes remove;
     v1 events (single role, replayed by a rebuild) still count; replaying everything changes nothing."""
     rita, ana, old = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
@@ -126,23 +119,23 @@ async def test_totals_count_role_holders_through_grant_revoke_and_replay(databas
         event("RoleGranted", {"user_id": ana, "role": "ADMIN", "granted_by": rita}),  # admins aren't counted
         event("RoleRevoked", {"user_id": rita, "role": "CANDIDATE", "revoked_by": rita}),
     ]
-    await feed(consumer, *story)
+    await feed(*story)
     m = await numbers()
     assert (m["total_candidates"], m["total_recruiters"]) == (1, 3)  # ana | rita, old, ana
-    await feed(consumer, *story)  # redelivered: processed_events skips every one
+    await feed(*story)  # recorded again: the fact ids skip every one
     assert await numbers() == m
 
 
-async def test_revoking_a_role_never_counted_stays_at_zero(database, consumer):
+async def test_revoking_a_role_never_counted_stays_at_zero(database):
     # A user from before events existed: their registration was never counted
-    await feed(consumer, event("RoleRevoked", {"user_id": str(uuid.uuid4()), "role": "RECRUITER", "revoked_by": str(uuid.uuid4())}))
+    await feed(event("RoleRevoked", {"user_id": str(uuid.uuid4()), "role": "RECRUITER", "revoked_by": str(uuid.uuid4())}))
     assert (await numbers())["total_recruiters"] == 0
 
 
-async def test_application_before_its_job_ready_still_counts_once(database, consumer):
+async def test_application_before_its_job_ready_still_counts_once(database):
     """Different topics have no order between them: JobReady may be processed after an application."""
     job_id = str(uuid.uuid4())
-    await feed(consumer, submitted(str(uuid.uuid4()), job_id, str(uuid.uuid4()), title=""), job_ready(job_id, "Late Title"))
+    await feed(submitted(str(uuid.uuid4()), job_id, str(uuid.uuid4()), title=""), job_ready(job_id, "Late Title"))
     m = await numbers()
     assert m["total_jobs_published"] == 1 and m["most_applied_jobs"] == [{"job_id": job_id, "title": "Late Title",
                                                                           "applications": 1}]
@@ -155,7 +148,7 @@ async def test_empty_read_model_has_no_ratios(database):
 
 
 def test_interview_stage_detection():
-    assert handlers.is_interview_stage("Technical Interview") and not handlers.is_interview_stage("Offer")
+    assert facts_service.is_interview_stage("Technical Interview") and not facts_service.is_interview_stage("Offer")
 
 
 # ---------------------------------------------------------------- the API
@@ -209,17 +202,17 @@ async def test_facts_keep_only_what_the_metrics_need(database):
     assert set(data) == {"job_id", "title", "version"}
 
 
-async def test_rebuild_from_facts_gives_identical_numbers(database, consumer):
+async def test_rebuild_from_facts_gives_identical_numbers(database):
     from app.services import facts
 
     job = str(uuid.uuid4())
-    await feed(consumer, event("UserRegistered", {"user_id": str(uuid.uuid4()), "role": "RECRUITER"}), job_ready(job))
+    await feed(event("UserRegistered", {"user_id": str(uuid.uuid4()), "role": "RECRUITER"}), job_ready(job))
     await record("ApplicationSubmitted", {"application_id": str(uuid.uuid4()), "job_id": job,
                                           "candidate_id": str(uuid.uuid4()), "job_title": "Backend Engineer"})
     await record("ApplicationDecisionMade", {"application_id": str(uuid.uuid4()), "decision": "HIRED"})
     before = await numbers()
     async with db.session_scope() as s:
-        assert await facts.rebuild(s) == 4  # events from Kafka and facts from workflows, all in one log
+        assert await facts.rebuild(s) == 4  # every fact, whichever path recorded it, in one log
     assert await numbers() == before
 
 

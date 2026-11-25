@@ -57,7 +57,7 @@ def get_engine() -> AsyncEngine:
 @asynccontextmanager
 async def session_scope() -> AsyncIterator[AsyncSession]:
     """One transaction: commit if the block finishes, roll back if it raises.
-    Also used outside HTTP (outbox relay, Kafka consumers)."""
+    Also used outside HTTP (retention jobs, CLI commands)."""
     if _session_factory is None:
         raise RuntimeError("Database not initialised: call init_db() at startup")
     async with _session_factory() as session:

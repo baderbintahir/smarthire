@@ -1,7 +1,7 @@
 {
   "uid": "smarthire-async",
   "title": "SmartHire / Async processing",
-  "description": "Kafka vs Temporal (Step 13.8, Appendix F.2). Temporal: one row of panels per workflow type; find one stuck process in the Temporal UI by workflow id. Kafka: no central view, so lag, DLQ, outbox backlog, throughput per consumer group, and traces by event id.",
+  "description": "Design v2.1: one async platform. Temporal runs every workflow in the orchestrator; each step is an HTTP call to a service's /internal/* endpoint.",
   "tags": [
     "smarthire"
   ],
@@ -16,7 +16,7 @@
   "panels": [
     {
       "type": "row",
-      "title": "Workflows (Temporal: orchestration)",
+      "title": "Workflows (Temporal, all run by the orchestrator)",
       "collapsed": false,
       "gridPos": {
         "w": 24,
@@ -265,333 +265,165 @@
       "id": 6
     },
     {
+      "id": 7,
       "type": "row",
-      "title": "Events (Kafka: choreography) - one series per consumer group",
-      "collapsed": false,
+      "title": "Actions (POST /actions: the caller waits for the commit step)",
       "gridPos": {
+        "x": 0,
+        "y": 17,
         "w": 24,
-        "h": 1,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Actions/s by answer",
+      "gridPos": {
         "x": 0,
-        "y": 17
+        "y": 18,
+        "w": 12,
+        "h": 8
       },
-      "panels": [],
-      "id": 7
-    },
-    {
-      "type": "timeseries",
-      "title": "Consumer lag",
-      "description": "Messages not yet processed. Growing = the group is falling behind or stopped",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (consumer) (smarthire_consumer_lag)",
-          "legendFormat": "{{consumer}}",
-          "refId": "A"
+          "refId": "A",
+          "expr": "sum by (status) (rate(http_requests_total{service=\"orchestrator\", route=\"/actions/{action}\"}[1m]))",
+          "legendFormat": "{{status}}"
         }
       ],
-      "gridPos": {
-        "w": 8,
-        "h": 8,
-        "x": 0,
-        "y": 18
-      },
       "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
+        "defaults": {},
         "overrides": []
       },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "id": 8
+      "description": "200 committed; 4xx a business rule said no; 503 Temporal down (WORKFLOWS_UNAVAILABLE) or no answer in 10 s (STILL_PROCESSING)"
     },
     {
+      "id": 9,
       "type": "timeseries",
-      "title": "Events handled/s by outcome",
-      "description": "",
+      "title": "Time to commit p95",
+      "gridPos": {
+        "x": 12,
+        "y": 18,
+        "w": 12,
+        "h": 8
+      },
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (consumer, outcome) (rate(smarthire_events_consumed_total[1m]))",
-          "legendFormat": "{{consumer}} {{outcome}}",
-          "refId": "A"
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{service=\"orchestrator\", route=\"/actions/{action}\"}[5m])))",
+          "legendFormat": "p95"
         }
       ],
-      "gridPos": {
-        "w": 8,
-        "h": 8,
-        "x": 8,
-        "y": 18
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "id": 9
-    },
-    {
-      "type": "timeseries",
-      "title": "Dead-lettered (1 h)",
-      "description": "Any value > 0 needs a human: inspect <topic>.dlq in Kafka UI",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (consumer, topic) (increase(smarthire_dlq_messages_total[1h]))",
-          "legendFormat": "{{consumer}} {{topic}}",
-          "refId": "A"
-        }
-      ],
-      "gridPos": {
-        "w": 8,
-        "h": 8,
-        "x": 16,
-        "y": 18
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "id": 10
-    },
-    {
-      "type": "timeseries",
-      "title": "Outbox backlog",
-      "description": "Committed events not yet on Kafka (the services that have an outbox)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "smarthire_outbox_backlog{service=~\"identity|job|candidate|application|scoring\"}",
-          "legendFormat": "{{service}}",
-          "refId": "A"
-        }
-      ],
-      "gridPos": {
-        "w": 8,
-        "h": 8,
-        "x": 0,
-        "y": 26
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "id": 11
-    },
-    {
-      "type": "timeseries",
-      "title": "Oldest unpublished outbox event",
-      "description": "Seconds. Above a few seconds: Kafka down or the relay stuck",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "max by (service) (smarthire_outbox_oldest_age_seconds{service=~\"identity|job|candidate|application|scoring\"})",
-          "legendFormat": "{{service}}",
-          "refId": "A"
-        }
-      ],
-      "gridPos": {
-        "w": 8,
-        "h": 8,
-        "x": 8,
-        "y": 26
-      },
       "fieldConfig": {
         "defaults": {
           "unit": "s"
         },
         "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "id": 12
+      }
     },
     {
-      "type": "timeseries",
-      "title": "Events published/s per topic",
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (topic) (rate(smarthire_outbox_published_total[1m]))",
-          "legendFormat": "{{topic}}",
-          "refId": "A"
-        }
-      ],
-      "gridPos": {
-        "w": 8,
-        "h": 8,
-        "x": 16,
-        "y": 26
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "id": 13
-    },
-    {
+      "id": 10,
       "type": "row",
-      "title": "Background tasks (Celery on RabbitMQ)",
-      "collapsed": false,
+      "title": "Workflow steps (the orchestrator's HTTP calls to each service's /internal/* endpoints)",
       "gridPos": {
-        "w": 24,
-        "h": 1,
         "x": 0,
-        "y": 34
+        "y": 26,
+        "w": 24,
+        "h": 1
       },
-      "panels": [],
-      "id": 14
+      "collapsed": false,
+      "panels": []
     },
     {
+      "id": 11,
       "type": "timeseries",
-      "title": "Queue depth",
-      "description": "Ready = waiting for a worker. Growing = workers stopped or too slow",
+      "title": "Step calls/s by service",
+      "gridPos": {
+        "x": 0,
+        "y": 27,
+        "w": 8,
+        "h": 8
+      },
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_ready{queue=~\"emails|resumes\"})",
-          "legendFormat": "{{queue}} ready",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (queue) (rabbitmq_detailed_queue_messages_unacked{queue=~\"emails|resumes\"})",
-          "legendFormat": "{{queue}} in progress",
-          "refId": "B"
+          "refId": "A",
+          "expr": "sum by (service) (rate(http_requests_total{route=~\"/internal/.*\"}[1m]))",
+          "legendFormat": "{{service}}"
         }
       ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Step errors/s (5xx retried, 4xx business answers)",
       "gridPos": {
-        "w": 24,
-        "h": 8,
-        "x": 0,
-        "y": 35
+        "x": 8,
+        "y": 27,
+        "w": 8,
+        "h": 8
       },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service, status) (rate(http_requests_total{route=~\"/internal/.*\", status=~\"[45]..\"}[1m]))",
+          "legendFormat": "{{service}} {{status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Step duration p95 by route",
+      "gridPos": {
+        "x": 16,
+        "y": 27,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, service, route) (rate(http_request_duration_seconds_bucket{route=~\"/internal/.*\"}[5m])))",
+          "legendFormat": "{{service}} {{route}}"
+        }
+      ],
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "s"
         },
         "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "id": 15
+      }
     }
   ],
   "templating": {

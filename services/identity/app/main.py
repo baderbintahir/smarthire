@@ -10,7 +10,6 @@ from smarthire_common.logging import setup_logging
 from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.orchestrator_client import OrchestratorClient
-from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
 from smarthire_common.retention import start_retention
 from smarthire_common.service_auth import close_service_auth, init_service_auth
@@ -48,10 +47,7 @@ def create_app(settings: Settings | None = None, *, orchestrator=None,
         # login rate limiting (security controls) need Redis
         register_readiness_check("database", db_ping_check)
         register_readiness_check("redis", redis_ping_check)
-        # Publishes UserRegistered events from the outbox. Kafka is NOT a readiness check: while
-        # Kafka is down, registration still works and events wait in the outbox
-        tasks = [start_outbox_relay(settings)] if settings.kafka_enabled else []
-        tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
+        tasks = start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
         await close_service_auth()

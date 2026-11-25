@@ -1,22 +1,17 @@
 """Step 13.2: spans are created, a caller's trace is joined, health checks are skipped, logs carry ids.
 Spans go to an in-memory exporter instead of Jaeger."""
 
-from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import SpanKind
-from prometheus_client import REGISTRY
 
 from smarthire_common import telemetry
 from smarthire_common.config import BaseServiceSettings
-from smarthire_common.events import new_event
 from smarthire_common.health import health_router
-from smarthire_common.kafka import EventConsumer
 from smarthire_common.logging import _trace_ids
-from smarthire_common.outbox import KafkaSender
 
 EXPORTER = InMemorySpanExporter()
 CALLER_TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -87,62 +82,5 @@ async def test_sql_statements_get_spans_inside_a_trace(client):  # `client` sets
 
 
 async def test_background_sql_without_a_parent_is_not_traced(client):
-    await run_sql("SELECT 43")  # like the outbox relay's poll every 200 ms
+    await run_sql("SELECT 43")  # like a retention job's query, with no request around it
     assert finished_spans() == []
-
-
-def test_new_events_carry_the_current_trace_context(client):
-    with telemetry.get_tracer().start_as_current_span("request", kind=SpanKind.SERVER) as span:
-        event = new_event("UserRegistered", producer="test", payload={"user_id": "u", "role": "CANDIDATE"})
-    assert event.trace_context["traceparent"].split("-")[1] == format(span.get_span_context().trace_id, "032x")
-    finished_spans()
-    assert new_event("UserRegistered", producer="t", payload={}).trace_context == {}  # outside a span
-
-
-def test_relay_publish_continues_the_events_trace_and_puts_its_own_span_in_the_headers(client):
-    with telemetry.get_tracer().start_as_current_span("request", kind=SpanKind.SERVER):
-        event = new_event("UserRegistered", producer="test", payload={"user_id": "u", "role": "CANDIDATE"})
-    sender = object.__new__(KafkaSender)  # no Kafka: fake producer and serializer
-    sender._serialize = lambda event_type, payload, topic: b"value"
-    sender._producer = producer = FakeProducer()
-    row = SimpleNamespace(id=1, topic="identity.users", message_key="u", event_type="UserRegistered",
-                          payload=event.model_dump(mode="json"), headers=event.trace_context)
-    assert sender([row]) == [1]
-    publish = next(s for s in finished_spans() if s.name == "publish identity.users")
-    assert publish.kind == SpanKind.PRODUCER and publish.parent is not None
-    traceparent = dict(producer.headers)["traceparent"]
-    assert traceparent.split("-")[2] == format(publish.context.span_id, "016x")  # consumers continue from here
-
-
-async def test_consumer_continues_the_trace_from_the_message_headers(client):
-    seen = []
-
-    async def handler(session, event):
-        seen.append(_trace_ids()["trace_id"])
-
-    consumer = EventConsumer(name="c", topics=["identity.users"], handlers={"UserRegistered": handler},
-                             bootstrap_servers="unused", schema_registry_url="unused")
-    event = new_event("UserRegistered", producer="test", payload={"user_id": "u", "role": "CANDIDATE"})
-    consumer._deserialize = lambda msg: event.model_dump(mode="json")
-
-    async def fake_process(envelope, handler):
-        await handler(None, envelope)
-        return True
-
-    consumer.process = fake_process
-    headers = [("traceparent", f"00-{CALLER_TRACE_ID}-00f067aa0ba902b7-01".encode())]
-    await consumer.handle_message(SimpleNamespace(headers=lambda: headers, topic=lambda: "identity.users"))
-    span = next(s for s in finished_spans() if s.kind == SpanKind.CONSUMER)
-    assert span.name == "process UserRegistered" and seen == [CALLER_TRACE_ID]
-    assert span.attributes["messaging.message.id"] == str(event.event_id) and span.attributes["outcome"] == "processed"
-    assert REGISTRY.get_sample_value("smarthire_events_consumed_total",
-                                     {"consumer": "c", "event_type": "UserRegistered", "outcome": "processed"}) == 1
-
-
-class FakeProducer:
-    def produce(self, topic, key, value, headers, on_delivery):
-        self.headers = headers
-        self._callback = on_delivery
-
-    def flush(self, _timeout):
-        self._callback(None, None)

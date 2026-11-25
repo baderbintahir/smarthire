@@ -21,7 +21,6 @@ async def test_schema_names_match_appendix_e4_exactly(migrated, database_url):
         "pk_users", "ck_users_status", "uq_users_email_lower",
         "pk_roles", "uq_roles_name",
         "pk_user_roles", "fk_user_roles_user_id_users", "fk_user_roles_role_id_roles", "ix_user_roles_role_id",
-        "pk_outbox", "uq_outbox_event_id", "ix_outbox_unpublished",
     }
 
 

@@ -1,22 +1,18 @@
-"""Step 10.2: resume parsing. Pure rules first, then the use case on real Postgres + MinIO (called
-directly: Celery only decides WHEN it runs). Plus the consumer handler that enqueues it."""
+"""Step 10.2: resume parsing. Pure rules first, then the use case on real Postgres + MinIO (called directly;
+in production it is ResumeProcessingWorkflow's parse_resume step, served by candidate-parser)."""
 
 import uuid
 from datetime import date
 
 import pytest
 from smarthire_common import db, testing
-from smarthire_common.events import new_event
-from smarthire_common.kafka import RetryLater
 from sqlalchemy import text
 
 from app.domain.resume_parser import ResumeUnreadableError, education, experience_years, extract_text, parse
-from app.events import handlers
 from app.models import Candidate, Resume
 from app.models.candidate import DOCX, PDF
 from app.repositories import files
 from app.services import parsing
-from app.tasks import parsing as task_module
 from tests.conftest import BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY, TABLES
 from tests.resume_files import RESUME_LINES, make_docx, make_pdf
 
@@ -57,11 +53,6 @@ def test_unreadable_or_empty_files(data):
     with pytest.raises(ResumeUnreadableError):
         extract_text(data, PDF)
 
-
-def test_the_task_is_configured_for_safe_retries():
-    task = task_module.parse_resume
-    assert task.name == "parse_resume" and task.max_retries == 5 and task.retry_backoff
-    assert task.app.conf.task_acks_late and task.app.conf.task_reject_on_worker_lost
 
 # ---------------------------------------------------------------- the use case (Postgres + MinIO)
 
@@ -118,34 +109,3 @@ async def test_unreadable_file_is_failed_not_retried(stores):
 
 async def test_unknown_resume_is_missing(stores):
     assert await parsing.parse_resume(uuid.uuid4()) == "missing"
-
-# ---------------------------------------------------------------- enqueuing from the event
-
-
-class FakeProducer:
-    def __init__(self, down=False):
-        self.sent, self.down = [], down
-
-    def send_task(self, name, args, queue):
-        if self.down:
-            raise ConnectionError("rabbitmq unreachable")
-        self.sent.append((name, args, queue))
-
-
-@pytest.mark.parametrize("down", [False, True])
-async def test_resume_uploaded_enqueues_parsing(monkeypatch, down):
-    producer = FakeProducer(down)
-    monkeypatch.setattr(handlers, "make_celery", lambda *a, **k: producer)
-
-    class Settings:
-        celery_broker_url = "amqp://unused"
-
-    handler = handlers.build_handlers(Settings())["ResumeUploaded"]
-    event = new_event("ResumeUploaded", producer="candidate",
-                      payload={"candidate_id": str(uuid.uuid4()), "resume_id": "r1", "content_type": PDF})
-    if down:
-        with pytest.raises(RetryLater):  # RabbitMQ down: the consumer waits and retries, never DLQ
-            await handler(None, event)
-    else:
-        await handler(None, event)
-        assert producer.sent == [("parse_resume", ["r1"], "resumes")]

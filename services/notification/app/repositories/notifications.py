@@ -1,7 +1,6 @@
 """All SQL for the notification log and templates."""
 
 import uuid
-from datetime import datetime
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -42,14 +41,6 @@ async def record_failure(session: AsyncSession, notification_id: uuid.UUID, erro
     if final:
         values["status"] = "FAILED"
     await session.execute(update(NotificationLog).where(NotificationLog.id == notification_id).values(**values))
-
-
-async def stale_queued(session: AsyncSession, older_than: datetime, limit: int = 100) -> list[uuid.UUID]:
-    """QUEUED emails nobody is working on (lost enqueue, broker restart). Served by
-    ix_notification_log_status_created (status, created_at)."""
-    stmt = (select(NotificationLog.id).where(NotificationLog.status == "QUEUED", NotificationLog.created_at < older_than)
-            .order_by(NotificationLog.created_at).limit(limit))
-    return list((await session.execute(stmt)).scalars())
 
 
 async def find_by_key(session: AsyncSession, key: str) -> NotificationLog | None:

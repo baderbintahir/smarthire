@@ -6,7 +6,6 @@ from smarthire_common.background import stop_tasks
 from smarthire_common.db import close_db, init_db
 from smarthire_common.errors import register_exception_handlers
 from smarthire_common.health import db_ping_check, health_router, register_readiness_check
-from smarthire_common.kafka import start_consumer
 from smarthire_common.logging import setup_logging
 from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
@@ -18,7 +17,6 @@ from smarthire_common.telemetry import flush_tracing, setup_tracing
 from app import maintenance
 from app.api import internal, metrics
 from app.config import Settings
-from app.events import handlers
 
 
 def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | None = None,
@@ -36,13 +34,9 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
         init_service_auth(service_key_provider or JWKSClient(settings.orchestrator_jwks_url))
         register_readiness_check("database", db_ping_check)
         register_readiness_check("redis", redis_ping_check)
-        # The read model is fed ONLY by facts (CQRS): from workflows (POST /internal/facts) and, until
-        # Step T10, from this consumer; both go through record_fact
-        tasks = []
-        if settings.kafka_enabled:
-            tasks = [start_consumer(settings, name=handlers.CONSUMER_NAME, topics=handlers.TOPICS,
-                                    handlers=handlers.HANDLERS)]
-        tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
+        # The read model is fed ONLY by facts (CQRS): the orchestrator's workflows record them through
+        # POST /internal/facts, and record_fact is the one writer of the projections
+        tasks = start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
         await close_service_auth()

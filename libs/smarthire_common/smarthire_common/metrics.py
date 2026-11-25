@@ -16,18 +16,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, ge
 HTTP_REQUESTS = Counter("http_requests_total", "HTTP requests handled", ["method", "route", "status"])
 HTTP_DURATION = Histogram("http_request_duration_seconds", "HTTP request duration", ["method", "route"])
 
-# ---------------------------------------------------------------- events (Kafka, outbox)
-OUTBOX_PUBLISHED = Counter("smarthire_outbox_published_total", "Outbox events confirmed by Kafka", ["topic"])
-OUTBOX_BACKLOG = Gauge("smarthire_outbox_backlog", "Outbox events not yet published")
-OUTBOX_OLDEST_AGE = Gauge("smarthire_outbox_oldest_age_seconds", "Age of the oldest unpublished outbox event")
-EVENTS_CONSUMED = Counter("smarthire_events_consumed_total", "Events handled by a consumer group",
-                          ["consumer", "event_type", "outcome"])  # processed | duplicate | ignored | dead_lettered
-CONSUMER_LAG = Gauge("smarthire_consumer_lag", "Messages in a partition not yet processed by the group",
-                     ["consumer", "topic", "partition"])
-DLQ_MESSAGES = Counter("smarthire_dlq_messages_total", "Messages sent to a dead-letter topic", ["consumer", "topic"])
-
 # ---------------------------------------------------------------- workflows (the Temporal SDK exports the rest)
-WORKFLOWS_STARTED = Counter("smarthire_workflows_started_total", "Workflows started", ["workflow_type"])
+# The orchestrator counts every action whose commit step succeeded (a retry that attaches counts again)
+WORKFLOWS_STARTED = Counter("smarthire_workflows_started_total", "Workflows started (commit answered)", ["workflow_type"])
 
 metrics_router = APIRouter(tags=["metrics"])
 

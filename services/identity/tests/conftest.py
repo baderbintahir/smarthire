@@ -61,7 +61,6 @@ def settings(migrated, database_url, redis_url, private_key_path) -> Settings:
         jwt_private_key_path=private_key_path,
         login_max_failures_per_email=3,  # small limits keep the rate-limit tests short
         login_max_failures_per_ip=6,
-        kafka_enabled=False,  # no Kafka in unit tests: events stay in the outbox (tests read it there)
         _env_file=None,
     )
 
@@ -88,7 +87,7 @@ def orchestrator(service_tokens):
 @pytest.fixture
 def client(settings, orchestrator, service_tokens):
     # CASCADE also empties user_roles; the seeded roles table stays
-    run(testing.truncate(settings.database_url, ["users", "outbox"]))
+    run(testing.truncate(settings.database_url, ["users"]))
     run(testing.flush_redis(settings.redis_url))
     app = create_app(settings, orchestrator=orchestrator, service_key_provider=service_tokens.key_provider)
     orchestrator.bind(app)

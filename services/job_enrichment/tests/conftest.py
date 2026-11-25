@@ -19,7 +19,7 @@ def mongo_url():
 def settings(mongo_url):
     from app.config import Settings
 
-    return Settings(mongo_url=mongo_url, mongo_database="enrichment_test", temporal_enabled=False, _env_file=None)
+    return Settings(mongo_url=mongo_url, mongo_database="enrichment_test", _env_file=None)
 
 
 async def _drop(mongo_url):

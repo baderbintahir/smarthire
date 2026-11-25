@@ -26,7 +26,7 @@ class NotificationLog(Base):
     __table_args__ = (
         CheckConstraint("status IN ('QUEUED', 'SENT', 'FAILED')", name="status"),
         CheckConstraint("attempts >= 0", name="attempts_non_negative"),
-        # The sweeper's query: WHERE status = 'QUEUED' AND created_at < ? (stuck emails)
+        # Finding emails by status and age: stuck QUEUED or FAILED ones (operators), old SENT ones (retention)
         Index("ix_notification_log_status_created", "status", "created_at"),
     )
 

@@ -306,7 +306,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "up{job=~\"services|gateway|temporal-workers|rabbitmq\"}",
+          "expr": "up{job=~\"services|gateway|temporal-workers\"}",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }

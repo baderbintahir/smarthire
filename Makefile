@@ -4,7 +4,7 @@
 .DEFAULT_GOAL := help
 
 # Targets are actions, not files: always run them even if a file/folder of that name exists
-.PHONY: help up down ps logs migrate test test-gateway test-events load-setup load-test load-verify chaos schemas api-walkthrough keys check-s
+.PHONY: help up down ps logs migrate test test-gateway test-workflows load-setup load-test load-verify chaos api-walkthrough keys check-s
 
 # Where a service's code lives: s=common is the shared library, anything else is services/<s>
 SERVICE_DIR = $(if $(filter common,$(s)),libs/smarthire_common,services/$(s))
@@ -33,8 +33,8 @@ test: check-s ## Run a service's tests on the host:  make test s=identity  (s=co
 test-gateway: ## Check the gateway (APISIX) config against the RUNNING stack (make up first)
 	uv run --no-project --with pytest --with httpx --with pyjwt pytest tests/gateway -q
 
-test-events: ## Check events end to end against the RUNNING stack (make up first)
-	uv run --no-project --with pytest --with httpx --with "confluent-kafka[schemaregistry,json]" pytest tests/events -q
+test-workflows: ## Check workflows end to end against the RUNNING stack (make up first)
+	uv run --no-project --with pytest --with httpx --with pypdf --with python-docx pytest tests/workflows -q
 
 LOAD = uv run --no-project --with httpx --with locust
 load-setup: ## Load test data: n candidates (default 500) with parsed resumes + 5 jobs (Step 14.4)
@@ -49,9 +49,6 @@ load-verify: ## After a load test: nothing lost or duplicated, everything conver
 
 chaos: ## During a load test: stop/start Kafka, Scoring, Notification, its worker, Candidate (Step 14.5)
 	uv run --no-project python tests/load/chaos.py
-
-schemas: ## Register the event schemas in Schema Registry (also runs on every `make up`)
-	SCHEMA_REGISTRY_URL=http://localhost:8081 PYTHONPATH=libs/smarthire_common python3 infra/schema-registry/register.py
 
 api-walkthrough: ## Regenerate docs/api-walkthrough.{md,html} from the Postman collection
 	python3 postman/walkthrough.py

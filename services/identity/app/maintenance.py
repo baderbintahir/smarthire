@@ -1,17 +1,17 @@
-"""Retention jobs for Identity (Step 14.3b, Appendix E.14): the outbox. Refresh sessions need no job:
-they live in Redis and expire by TTL (design v1.2).
+"""Retention jobs for Identity (Step 14.3b, Appendix E.14): none any more. Refresh sessions live in Redis
+and expire by TTL (design v1.2); the outbox is gone (design v2.0). Kept so every service has the same entry point.
 
 Run them all now (instead of waiting for the schedule): `docker compose exec identity python -m app.maintenance`."""
 
 import asyncio
 
 from smarthire_common.db import close_db, init_db
-from smarthire_common.retention import outbox_job, run_all
+from smarthire_common.retention import run_all
 
 from app.config import Settings
 
 
-JOBS = [outbox_job()]
+JOBS: list = []
 
 
 async def _main() -> None:

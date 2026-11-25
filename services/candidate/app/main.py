@@ -10,7 +10,6 @@ from smarthire_common.logging import setup_logging
 from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.orchestrator_client import OrchestratorClient
-from smarthire_common.outbox import start_outbox_relay
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
 from smarthire_common.service_auth import close_service_auth, init_service_auth
 from smarthire_common.retention import start_retention
@@ -54,10 +53,8 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
         # Without Redis we can't check revocation, and protected routes fail closed: not ready
         register_readiness_check("redis", redis_ping_check)
         register_readiness_check("storage", storage_ping_check)  # uploads need the bucket
-        # Design v2.1: no consumer any more (profiles and parsing are workflow steps). The outbox relay
-        # stays until Step T10 removes Kafka (nothing writes to the outbox now)
-        tasks = [start_outbox_relay(settings)] if settings.kafka_enabled else []
-        tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
+        # Design v2.1: no consumer, no outbox (profiles and parsing are the orchestrator's workflow steps)
+        tasks = start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
         await close_service_auth()

@@ -14,7 +14,7 @@ from app.domain.applications import CandidateFacts
 
 SERVICE_DIR = Path(__file__).resolve().parents[1]
 TABLES = ["job_replica", "applications", "application_stage_history", "application_notes", "application_quotas",
-          "audit_entries", "outbox", "processed_events"]
+          "audit_entries"]
 MAX_ACTIVE = 3  # small, so quota tests stay short
 
 
@@ -117,7 +117,7 @@ def client(migrated, database_url, redis_url, tokens, candidates, service_tokens
     testing.run(testing.truncate(database_url, TABLES))
     testing.run(testing.flush_redis(redis_url))
     settings = Settings(database_url=database_url, redis_url=redis_url, max_active_applications=MAX_ACTIVE,
-                        kafka_enabled=False, temporal_enabled=False, _env_file=None)
+                        _env_file=None)
     app = create_app(settings, key_provider=tokens.key_provider, candidate_client=candidates,
                      service_key_provider=service_tokens.key_provider, orchestrator=orchestrator)
     orchestrator.bind(app)

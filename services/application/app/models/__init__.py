@@ -7,4 +7,3 @@ from app.models.application import (  # noqa: F401
     JobReplica,
     StageHistory,
 )
-from app.models.messaging import OutboxEvent, ProcessedEvent  # noqa: F401

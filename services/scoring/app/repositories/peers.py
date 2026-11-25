@@ -1,5 +1,5 @@
 """Reading other services' INTERNAL APIs (Candidate, Job Enrichment). Scoring owns no copy of resumes
-or jobs: it asks the owners at scoring time (Temporal retries the activity if one of them is down).
+or jobs: it asks the owners at scoring time (the orchestrator retries the step if one of them is down).
 
 TODO(Phase 14): service-to-service authentication; today these calls rely on the internal network."""
 
@@ -24,7 +24,7 @@ async def close_peers() -> None:
 
 
 async def _get(url: str) -> dict | None:
-    """The JSON body, or None for 404. Other failures raise (Temporal retries them)."""
+    """The JSON body, or None for 404. Other failures raise (the step answers 503 and is retried)."""
     response = await _http.get(url)
     if response.status_code == 404:
         return None

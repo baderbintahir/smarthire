@@ -23,6 +23,7 @@ from temporalio.exceptions import ApplicationError
 from temporalio.service import RPCError, RPCStatusCode
 
 from smarthire_common.errors import AppError, NotFoundError, StillProcessingError, WorkflowsUnavailableError
+from smarthire_common.metrics import WORKFLOWS_STARTED
 
 from app.steps import BUSINESS_ERROR
 
@@ -73,6 +74,7 @@ async def run_action(action: str, body: ActionRequest, request: Request) -> dict
             raise WorkflowsUnavailableError() from None
         log.warning("action %s: Temporal answered %s", action, err.status)
         raise StillProcessingError() from None
+    WORKFLOWS_STARTED.labels(spec.workflow).inc()
     return {"result": result}
 
 

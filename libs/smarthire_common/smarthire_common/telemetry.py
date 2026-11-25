@@ -9,9 +9,9 @@ we use, without touching our code:
 Finished spans are batched and sent over OTLP/HTTP to Jaeger in a background thread: a request never
 waits for (or fails because of) the tracing backend.
 
-Asynchronous hops (Step 13.3) carry the same W3C context: Kafka in message headers (kafka.py, outbox.py),
-Celery in task headers (Celery instrumentation), Temporal in workflow/activity headers (temporal.py's
-TracingInterceptor). So one trace follows a request through events, workflows and background tasks."""
+Asynchronous hops carry the same W3C context: Temporal in workflow/activity headers (temporal.py's
+TracingInterceptor), then plain HTTP (traceparent) from the orchestrator's steps to each service's internal
+endpoint. So one trace follows a request through the orchestrator's workflow into every service (design v2.1)."""
 
 import logging
 
@@ -40,9 +40,9 @@ _provider: TracerProvider | None = None  # one per process (OTel's global provid
 
 class _SkipBackgroundRoots(Sampler):
     """Decides for spans WITHOUT a parent. A trace may START with work arriving (an HTTP request, a
-    Kafka message, a Celery task: SERVER/CONSUMER/PRODUCER spans). A parentless CLIENT/INTERNAL span is
-    background chatter (the outbox relay's SELECT every 200 ms, readiness pings): dropped, or Jaeger
-    would be buried in one-span traces. Spans WITH a parent follow it (ParentBased below)."""
+    workflow run: SERVER/CONSUMER/PRODUCER spans). A parentless CLIENT/INTERNAL span is background chatter
+    (retention jobs' SQL, readiness pings): dropped, or Jaeger would be buried in one-span traces. Spans
+    WITH a parent follow it (ParentBased below)."""
 
     def should_sample(self, parent_context, trace_id, name, kind=None, attributes=None, links=None, trace_state=None):
         if kind in (SpanKind.SERVER, SpanKind.CONSUMER, SpanKind.PRODUCER):
@@ -56,7 +56,7 @@ class _SkipBackgroundRoots(Sampler):
 def setup_tracing(settings: BaseServiceSettings, app: FastAPI | None = None, *,
                   exporter: SpanExporter | None = None, service_name: str | None = None) -> None:
     """Call in create_app (before the lifespan creates DB/Redis/Mongo clients), or with no app in a
-    Celery worker process. No-op unless settings.tracing_enabled. `service_name` overrides the
+    worker process. No-op unless settings.tracing_enabled. `service_name` overrides the
     settings' (workers: "<service>-worker"). `exporter` lets tests collect spans in memory."""
     global _provider
     if not settings.tracing_enabled:
@@ -85,12 +85,6 @@ def _instrument_libraries() -> None:
         PymongoInstrumentor().instrument()  # a global command listener: applies to clients created after
     except ImportError:
         pass
-    try:  # `celery` extra. Sending side: puts traceparent in the task headers; worker side: continues it
-        from opentelemetry.instrumentation.celery import CeleryInstrumentor
-
-        CeleryInstrumentor().instrument()
-    except ImportError:
-        pass
 
 
 def trace_engine(engine) -> None:
@@ -111,7 +105,7 @@ def flush_tracing() -> None:
 
 
 def get_tracer():
-    """For hand-made spans (Kafka publish/process, SMTP). A no-op tracer while tracing is off."""
+    """For hand-made spans (e.g. SMTP). A no-op tracer while tracing is off."""
     return trace.get_tracer("smarthire")
 
 
