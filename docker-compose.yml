@@ -355,6 +355,31 @@ services:
       timeout: 3s
       retries: 5
 
+  orchestrator:                                    # design v2.1: runs every workflow, the only Temporal client
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    environment:
+      SERVICE_NAME: orchestrator
+      TRACING_ENABLED: "true"
+      PORT: "8012"
+      TEMPORAL_ADDRESS: temporal:7233
+    volumes:
+      # Keys from `make keys` (gitignored): token signing + payload encryption. Read-only, this service only
+      - ./secrets/orchestrator:/run/secrets/orchestrator:ro
+    # Two replicas: both poll orchestrator-tq, and services reach either one as orchestrator:8012 (Docker DNS).
+    # No host port (internal only; two replicas can't publish the same port anyway)
+    deploy:
+      replicas: 2
+    depends_on:
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8012/health/live')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   # ------------------------------------------------------------ workflows + documents (Phase 9)
   temporal:
     # Temporal's dev server (temporal CLI): server + Web UI in one process, state in a SQLite file.

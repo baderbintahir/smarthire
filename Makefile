@@ -56,8 +56,10 @@ schemas: ## Register the event schemas in Schema Registry (also runs on every `m
 api-walkthrough: ## Regenerate docs/api-walkthrough.{md,html} from the Postman collection
 	python3 postman/walkthrough.py
 
-keys: ## Generate the dev RSA key pair Identity signs JWTs with (secrets/identity, gitignored)
-	cd services/identity && uv run python scripts/generate_dev_keys.py
+keys: ## Generate dev keys: Identity's JWT key, the orchestrator's token + payload keys (secrets/, gitignored)
+	@# Identity's script refuses to replace an existing key (that would log everyone out): don't stop on it
+	-cd services/identity && uv run python scripts/generate_dev_keys.py
+	cd services/orchestrator && uv run python scripts/generate_dev_keys.py
 
 # Internal: fail early with a clear message when s=... is missing
 check-s:

@@ -36,14 +36,18 @@ def _metrics_runtime(settings) -> Runtime:
     return _runtime
 
 
-async def connect(settings, *, retry_seconds: float = 5.0) -> Client:
-    """The process-wide Temporal client, connecting (and retrying until it works) on first use."""
+async def connect(settings, *, retry_seconds: float = 5.0, data_converter=None) -> Client:
+    """The process-wide Temporal client, connecting (and retrying until it works) on first use.
+    data_converter: e.g. one with an encrypting payload codec (the orchestrator, design v2.1); the first
+    caller decides it for the whole process."""
     global _client
     async with _lock:  # concurrent first callers share one connection attempt
         while _client is None:
             try:
+                extra = {"data_converter": data_converter} if data_converter is not None else {}
                 _client = await Client.connect(settings.temporal_address, namespace=settings.temporal_namespace,
-                                               interceptors=[TracingInterceptor()], runtime=_metrics_runtime(settings))
+                                               interceptors=[TracingInterceptor()], runtime=_metrics_runtime(settings),
+                                               **extra)
                 log.info("connected to Temporal at %s", settings.temporal_address)
             except Exception as exc:
                 log.warning("Temporal not reachable (%s); retrying in %ss", exc, retry_seconds)
@@ -51,13 +55,14 @@ async def connect(settings, *, retry_seconds: float = 5.0) -> Client:
     return _client
 
 
-def start_worker(settings, *, task_queue: str, workflows: Sequence = (), activities: Sequence = ()) -> asyncio.Task:
+def start_worker(settings, *, task_queue: str, workflows: Sequence = (), activities: Sequence = (),
+                 data_converter=None) -> asyncio.Task:
     """Run a worker for this task queue as a background task (cancel it on shutdown). A worker POLLS
     Temporal for tasks of its queue; nothing calls into this service, so it needs no open port."""
 
     async def run() -> None:
         while True:
-            client = await connect(settings)
+            client = await connect(settings, data_converter=data_converter)
             try:
                 log.info("Temporal worker started on %s", task_queue)
                 await Worker(client, task_queue=task_queue, workflows=list(workflows), activities=list(activities),
