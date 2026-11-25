@@ -1,74 +1,75 @@
-"""Admin commands (Step 12.4). Rebuild the whole read model from the events:
+"""Admin commands.
 
-    docker compose stop analytics
-    docker compose run --rm analytics python -m app.cli rebuild
-    docker compose start analytics
+    docker compose exec analytics python -m app.cli rebuild
+        Rebuild the read model from Analytics' own `facts` table (design v2.0): empty the projections and
+        re-apply every fact in time order, in one transaction. Analytics can keep running meanwhile: new
+        facts wait for the rebuild to commit. The numbers come back identical, the proof that the
+        projections are only a VIEW of the facts.
 
-The projections are disposable: empty them, re-read every topic from its first message, and the
-numbers come back identical. That is the proof that Analytics owns no data, only a VIEW of events."""
+    docker compose exec analytics python -m app.cli backfill-facts
+        One-off (Step T4, while Kafka still exists): copy every past event from the Kafka topics into
+        `facts`, keyed by event id, WITHOUT applying them (the projections already count them). After it, a
+        rebuild from facts gives today's numbers, and Kafka's history is no longer needed."""
 
 import argparse
 import asyncio
 
-from confluent_kafka.admin import AdminClient
 from smarthire_common.db import close_db, init_db, session_scope
+from smarthire_common.events import EventEnvelope
 from smarthire_common.kafka import EventConsumer
 from smarthire_common.logging import setup_logging
 from smarthire_common.redis import close_redis, get_redis, init_redis
-from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.events import handlers
-from app.models.projections import PROJECTION_TABLES
+from app.repositories import facts as facts_repo
+from app.services import facts
 from app.services.metrics import CACHE_KEY
 
-
-def _group_is_idle(settings: Settings) -> bool:
-    """The live consumer must be stopped: it would share the partitions with the rebuild."""
-    admin = AdminClient({"bootstrap.servers": settings.kafka_bootstrap_servers})
-    description = admin.describe_consumer_groups([handlers.CONSUMER_NAME])[handlers.CONSUMER_NAME].result(timeout=10)
-    return not description.members
-
-
-async def _wait_until_idle(settings: Settings, timeout: float = 60.0) -> bool:
-    """A consumer that stopped cleanly leaves the group at once; one that was killed lingers until Kafka's
-    session timeout (45 s) expires. So wait a little before giving up."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while not await asyncio.to_thread(_group_is_idle, settings):
-        if asyncio.get_running_loop().time() > deadline:
-            return False
-        await asyncio.sleep(3)
-    return True
+BACKFILL_GROUP = "analytics-backfill"  # its own consumer group: it reads everything from offset 0
 
 
 async def rebuild(settings: Settings) -> int:
-    if not await _wait_until_idle(settings):
-        raise SystemExit("The analytics consumer is running: `docker compose stop analytics` first")
     init_db(settings.database_url)
     init_redis(settings.redis_url)
     try:
-        # Empty the read model and forget which events were processed (they will all be processed again)
         async with session_scope() as session:
-            await session.execute(text(f"TRUNCATE {', '.join(PROJECTION_TABLES + ['processed_events'])}"))
-        consumer = EventConsumer(name=handlers.CONSUMER_NAME, topics=handlers.TOPICS, handlers=handlers.HANDLERS,
-                                 bootstrap_servers=settings.kafka_bootstrap_servers,
-                                 schema_registry_url=settings.schema_registry_url)
-        replayed = await consumer.replay_from_beginning()
+            count = await facts.rebuild(session)
         await get_redis().delete(CACHE_KEY)  # don't serve numbers cached before the rebuild
-        return replayed
+        return count
     finally:
         await close_redis()
         await close_db()
 
 
+async def _store_only(session: AsyncSession, event: EventEnvelope) -> None:
+    await facts_repo.insert_fact(session, fact_id=str(event.event_id), kind=event.event_type,
+                                 occurred_at=event.occurred_at, data=facts.slim(event.event_type, event.payload))
+
+
+async def backfill(settings: Settings) -> int:
+    init_db(settings.database_url)
+    try:
+        consumer = EventConsumer(name=BACKFILL_GROUP, topics=handlers.TOPICS,
+                                 handlers={kind: _store_only for kind in facts.APPLIERS},
+                                 bootstrap_servers=settings.kafka_bootstrap_servers,
+                                 schema_registry_url=settings.schema_registry_url)
+        return await consumer.replay_from_beginning()
+    finally:
+        await close_db()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m app.cli")
-    parser.add_argument("command", choices=["rebuild"])
-    parser.parse_args()
+    parser.add_argument("command", choices=["rebuild", "backfill-facts"])
+    command = parser.parse_args().command
     settings = Settings()
     setup_logging(f"{settings.service_name}-cli", settings.log_level)
-    count = asyncio.run(rebuild(settings))
-    print(f"rebuilt the analytics read model from {count} events")
+    if command == "rebuild":
+        print(f"rebuilt the analytics read model from {asyncio.run(rebuild(settings))} facts")
+    else:
+        print(f"read {asyncio.run(backfill(settings))} events from Kafka into facts")
 
 
 if __name__ == "__main__":

@@ -99,12 +99,12 @@ Update this as steps finish. Mark `[x]` only when "Done when" is verified.
 - [x] Phase 13 Observability: [x] 13.1 jaeger/prometheus/grafana + /metrics · [x] 13.2 OTel chassis · [x] 13.3 async propagation · [x] 13.4 metrics · [x] 13.5 failures topic · [x] 13.6 dashboards · [x] 13.7 gateway telemetry · [x] 13.8 Kafka vs Temporal (chassis 101, all service suites pass, gateway 14, events e2e 15; break-its verified)
 - [ ] Phase 14 Reliability + load tests (tag v0.1-core): [x] 14.1 failure-path review · [x] 14.2 breakers + APISIX checks · [x] 14.3 backpressure · [x] 14.3b retention jobs · [x] 14.4 load test · [x] 14.5 chaos · [ ] 14.6 checkpoint (doc written; needs the user's screenshots, then tag v0.1-core)
 - [x] Phase 14R Review 1 changes (design v1.2, docs/architecture.html): [x] R0 plan sync · [x] R1 identity schema expand · [x] R2 chassis roles · [x] R3 identity roles/profile/events · [x] R4 refresh sessions in Redis · [x] R5 candidate · [x] R6 application · [x] R7 job/analytics/bff · [x] R8 contract migration · [x] R9 e2e + Postman
-- [ ] Phase 14T Temporal replaces Kafka and Celery via an orchestrator (design v2.0 + v2.1): [x] T0 plan · [x] T1 spike · [ ] T2 chassis · [ ] T3 orchestrator service · [ ] T4 analytics facts · [ ] T5 SendEmailWorkflow · [ ] T6 identity · [ ] T7 resumes · [ ] T8 jobs · [ ] T9 applications · [ ] T10 remove old path · [ ] T11 e2e + docs
+- [ ] Phase 14T Temporal replaces Kafka and Celery via an orchestrator (design v2.0 + v2.1): [x] T0 plan · [x] T1 spike · [x] T2 chassis · [x] T3 orchestrator service · [x] T4 analytics facts · [ ] T5 SendEmailWorkflow · [ ] T6 identity · [ ] T7 resumes · [ ] T8 jobs · [ ] T9 applications · [ ] T10 remove old path · [ ] T11 e2e + docs
 - [ ] Phase 15 Semantic index
 - [ ] Phase 16 AI assistant
 - [ ] Phase 17 Testing, docs, polish (tag v1.0)
 
-**Next step:** Phase 14T, Step T2 (chassis). Still open: 14.6 (screenshots, tag v0.1-core). Part B comes after 14T (its semantic index plugs into the v2.0 workflows instead of Kafka) on branch `part-b` (its 15.1 work is in `git stash` on part-b: `git checkout part-b && git stash pop`).
+**Next step:** Phase 14T, Step T5 (SendEmailWorkflow). Still open: 14.6 (screenshots, tag v0.1-core). Part B comes after 14T (its semantic index plugs into the v2.0 workflows instead of Kafka) on branch `part-b` (its 15.1 work is in `git stash` on part-b: `git checkout part-b && git stash pop`).
 
 ## Decisions & notes
 (Append facts future sessions need that aren't obvious from the code, e.g.
@@ -784,3 +784,14 @@ chosen library variants, deviations from the plan, ports changed, known TODOs.)
   STILL_PROCESSING. Resume parsing: `candidate-parser` container (Candidate image) instead of the Celery worker. Plan
   Phase 14T rewritten (T2 chassis, T3 orchestrator, T4-T9 flows, T10 removal, T11 e2e). User's choice: the orchestrator
   "owns everything" (rejected: per-service workers with a start-only orchestrator).
+- 14T PROGRESS (built in one pass at the user's request, like earlier phases): T2 chassis = service_auth.py
+  (ServiceTokenSigner, init_service_auth, require_orchestrator), internal.py (idempotency_key), orchestrator_client.py
+  (OrchestratorClient.run_action), errors WorkflowsUnavailableError / StillProcessingError, settings orchestrator_url /
+  orchestrator_jwks_url, testing.ServiceTokenFactory; temporal.connect/start_worker take data_converter. T3 orchestrator =
+  services/orchestrator (app/actions.py ACTIONS table, api/actions.py POST /actions/{action} + JWKS, steps.py ONE
+  activity `call_service(ServiceCall)` with summary=step name, workflows/base.py CommitFirst + call() + COMMIT_RETRY /
+  FOLLOW_UP_RETRY, codec.py). Tests use WorkflowEnvironment.start_local() (real dev server). Compose: 2 replicas, no host
+  port; needs `make keys` (user runs it: secrets/ is off-limits to Claude). T4 analytics: facts table (0002), appliers in
+  app/services/facts.py (record_fact, slim, rebuild under LOCK TABLE facts EXCLUSIVE), POST /internal/facts, Kafka consumer
+  now writes facts (fact_id = event_id), cli rebuild (from facts, no need to stop the service) + backfill-facts (group
+  analytics-backfill). LIVE: backfilled 97 events -> 88 facts; rebuild from facts == read model before (fingerprint diff).

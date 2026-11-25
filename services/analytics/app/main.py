@@ -12,15 +12,17 @@ from smarthire_common.metrics import setup_metrics
 from smarthire_common.middleware import RequestIdMiddleware
 from smarthire_common.redis import close_redis, init_redis, redis_ping_check
 from smarthire_common.retention import start_retention
+from smarthire_common.service_auth import close_service_auth, init_service_auth
 from smarthire_common.telemetry import flush_tracing, setup_tracing
 
 from app import maintenance
-from app.api import metrics
+from app.api import internal, metrics
 from app.config import Settings
 from app.events import handlers
 
 
-def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | None = None,
+               service_key_provider: KeyProvider | None = None) -> FastAPI:
     settings = settings or Settings()
     setup_logging(settings.service_name, settings.log_level)
 
@@ -30,9 +32,12 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
         init_redis(settings.redis_url)  # token denylist + metrics cache
         init_auth(key_provider or JWKSClient(settings.jwks_url), issuer=settings.jwt_issuer,
                   audience=settings.jwt_audience)
+        # Internal endpoints accept only the orchestrator's service tokens (design v2.1)
+        init_service_auth(service_key_provider or JWKSClient(settings.orchestrator_jwks_url))
         register_readiness_check("database", db_ping_check)
         register_readiness_check("redis", redis_ping_check)
-        # The read model is fed ONLY by events (CQRS): this consumer is the one writer
+        # The read model is fed ONLY by facts (CQRS): from workflows (POST /internal/facts) and, until
+        # Step T10, from this consumer; both go through record_fact
         tasks = []
         if settings.kafka_enabled:
             tasks = [start_consumer(settings, name=handlers.CONSUMER_NAME, topics=handlers.TOPICS,
@@ -40,6 +45,7 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
         tasks += start_retention(maintenance.JOBS)  # E.14 clean-up, daily (Step 14.3b)
         yield
         await stop_tasks(*tasks)
+        await close_service_auth()
         await close_auth()
         await close_redis()
         await close_db()
@@ -53,4 +59,5 @@ def create_app(settings: Settings | None = None, *, key_provider: KeyProvider | 
     app.include_router(health_router)
     setup_metrics(app)  # GET /metrics + request count/latency
     app.include_router(metrics.router)
+    app.include_router(internal.router)
     return app

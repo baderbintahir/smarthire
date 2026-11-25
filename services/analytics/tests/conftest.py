@@ -7,7 +7,7 @@ from smarthire_common import db, testing
 from app.models.projections import PROJECTION_TABLES
 
 SERVICE_DIR = Path(__file__).resolve().parents[1]
-TABLES = PROJECTION_TABLES + ["processed_events"]
+TABLES = PROJECTION_TABLES + ["processed_events", "facts"]
 
 
 @pytest.fixture(scope="session")
@@ -42,8 +42,13 @@ def tokens():
     return testing.TokenFactory()
 
 
+@pytest.fixture(scope="session")
+def service_tokens():
+    return testing.ServiceTokenFactory()  # the orchestrator's tokens for /internal/*
+
+
 @pytest.fixture
-def client(migrated, database_url, redis_url, tokens):
+def client(migrated, database_url, redis_url, tokens, service_tokens):
     from fastapi.testclient import TestClient
 
     from app.config import Settings
@@ -52,5 +57,6 @@ def client(migrated, database_url, redis_url, tokens):
     testing.run(testing.truncate(database_url, TABLES))
     testing.run(testing.flush_redis(redis_url))
     settings = Settings(database_url=database_url, redis_url=redis_url, kafka_enabled=False, _env_file=None)
-    with TestClient(create_app(settings, key_provider=tokens.key_provider)) as c:
+    with TestClient(create_app(settings, key_provider=tokens.key_provider,
+                               service_key_provider=service_tokens.key_provider)) as c:
         yield c

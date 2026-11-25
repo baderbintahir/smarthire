@@ -1,5 +1,5 @@
-"""Phase 12: events -> projections -> metrics, on real Postgres, through the real idempotent consumer
-logic (processed_events + handler in one transaction)."""
+"""Phase 12 + design v2.0: facts -> projections -> metrics, on real Postgres. Events still arrive through the
+real idempotent consumer (until Step T10) and become facts; workflows record facts via POST /internal/facts."""
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -179,3 +179,63 @@ def test_metrics_api_is_for_recruiters_and_admins_and_cached(client, tokens, red
 
     assert 0 < testing.run(cache_ttl()) <= 10  # cached for a few seconds
     assert client.get("/analytics/metrics", headers=tokens.headers(role="ADMIN")).json() == body
+
+
+# ---------------------------------------------------------------- facts (design v2.0)
+
+
+async def record(kind: str, data: dict, *, fact_id: str | None = None, at: datetime | None = None) -> bool:
+    from app.services import facts
+
+    async with db.session_scope() as s:
+        return await facts.record_fact(s, fact_id=fact_id or str(uuid.uuid4()), kind=kind,
+                                       occurred_at=at or datetime(2026, 11, 3, 10, tzinfo=UTC), data=data)
+
+
+async def test_a_fact_recorded_twice_counts_once(database):
+    data = {"user_id": str(uuid.uuid4()), "role": "CANDIDATE", "roles": ["CANDIDATE"]}
+    assert await record("UserRegistered", data, fact_id="register-abc:UserRegistered") is True
+    assert await record("UserRegistered", data, fact_id="register-abc:UserRegistered") is False  # a retried step
+    assert (await numbers())["total_candidates"] == 1
+
+
+async def test_facts_keep_only_what_the_metrics_need(database):
+    from sqlalchemy import text
+
+    await record("JobReady", {"job_id": str(uuid.uuid4()), "title": "SRE", "version": 1, "description": "long text",
+                              "recruiter_id": str(uuid.uuid4())}, fact_id="publish-1:JobReady")
+    async with db.session_scope() as s:
+        data = (await s.execute(text("SELECT data FROM facts WHERE fact_id = 'publish-1:JobReady'"))).scalar_one()
+    assert set(data) == {"job_id", "title", "version"}
+
+
+async def test_rebuild_from_facts_gives_identical_numbers(database, consumer):
+    from app.services import facts
+
+    job = str(uuid.uuid4())
+    await feed(consumer, event("UserRegistered", {"user_id": str(uuid.uuid4()), "role": "RECRUITER"}), job_ready(job))
+    await record("ApplicationSubmitted", {"application_id": str(uuid.uuid4()), "job_id": job,
+                                          "candidate_id": str(uuid.uuid4()), "job_title": "Backend Engineer"})
+    await record("ApplicationDecisionMade", {"application_id": str(uuid.uuid4()), "decision": "HIRED"})
+    before = await numbers()
+    async with db.session_scope() as s:
+        assert await facts.rebuild(s) == 4  # events from Kafka and facts from workflows, all in one log
+    assert await numbers() == before
+
+
+def test_internal_facts_endpoint(client, service_tokens, tokens):
+    body = {"fact_id": "application-j-c:ApplicationSubmitted", "kind": "ApplicationSubmitted",
+            "occurred_at": "2026-11-25T10:00:00Z",
+            "data": {"application_id": str(uuid.uuid4()), "job_id": str(uuid.uuid4()),
+                     "candidate_id": str(uuid.uuid4()), "job_title": "SRE"}}
+    assert client.post("/internal/facts", json=body, headers={"Idempotency-Key": "k"}).status_code == 401
+    user_token = {**tokens.headers(role="ADMIN"), "Idempotency-Key": "k"}
+    assert client.post("/internal/facts", json=body, headers=user_token).status_code == 401  # users can't
+    first = client.post("/internal/facts", json=body, headers=service_tokens.headers())
+    assert first.status_code == 200 and first.json() == {"recorded": True}
+    again = client.post("/internal/facts", json=body, headers=service_tokens.headers())
+    assert again.json() == {"recorded": False}  # a retried step: stored once
+    unknown = client.post("/internal/facts", json={**body, "kind": "Nope"}, headers=service_tokens.headers())
+    assert unknown.status_code == 422 and unknown.json()["error"]["code"] == "UNKNOWN_FACT_KIND"
+    metrics_body = client.get("/analytics/metrics", headers=tokens.headers(role="ADMIN")).json()
+    assert metrics_body["total_applications"] == 1
